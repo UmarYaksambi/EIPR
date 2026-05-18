@@ -1,18 +1,18 @@
-numpy
-scipy
-scikit-image
-opencv-python
-pywavelets
-reedsolo
-Pillow
-pyyaml
-matplotlib
-seaborn
-jupyter
+numpy>=1.24
+scipy>=1.10
+scikit-image>=0.21
+opencv-python>=4.8
+PyWavelets>=1.4
+reedsolo>=1.7
+Pillow>=10.0
+pyyaml>=6.0
+matplotlib>=3.7
+seaborn>=0.12
+jupyter>=1.0
+tqdm>=4.65
 
-
-# Optional for real regeneration attack:
-# diffusers
-# transformers
-# accelerate
-# torch6
+# Optional — required only for real regeneration attack
+# torch>=2.0
+# diffusers>=0.27
+# transformers>=4.40
+# accelerate>=0.27

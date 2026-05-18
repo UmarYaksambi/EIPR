@@ -2,10 +2,11 @@
 Experiment runner for Adaptive ECC Watermarking paper.
 
 Usage:
-    python experiment_runner.py --config configs/experiment.yaml --mode full
-    python experiment_runner.py --config configs/experiment.yaml --mode ablation_rate
-    python experiment_runner.py --config configs/experiment.yaml --mode calibrate
-    python experiment_runner.py --config configs/experiment.yaml --mode smoke_test
+    python experiments/experiment_runner.py --config configs/experiment.yaml --mode smoke_test
+    python experiments/experiment_runner.py --config configs/experiment.yaml --mode calibrate
+    python experiments/experiment_runner.py --config configs/experiment.yaml --mode full
+    python experiments/experiment_runner.py --config configs/experiment.yaml --mode ablation_rate
+    python experiments/experiment_runner.py --config configs/experiment.yaml --mode baseline_comparison
 """
 from __future__ import annotations
 
@@ -33,9 +34,10 @@ from src.frequency_analyzer import (
 )
 from src.ecc_engine import AdaptiveECCEngine
 from src.watermark_embedder import embed_watermark
-from src.watermark_decoder import extract_watermark          # ← was missing
+from src.watermark_decoder import extract_watermark
 from src.attack_suite import ATTACK_SUITE
 from src.metrics import bit_error_rate, normalized_correlation, image_psnr, image_ssim
+from src.utils import save_results, print_results_table, to_latex_table, Timer
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +51,8 @@ def _load_config(path: str) -> dict:
 
 def _make_rate_map(img: np.ndarray, cfg: dict) -> np.ndarray:
     """Extract luminance channel and build the per-block ECC rate map."""
-    ycrcb = __import__("cv2").cvtColor(img, __import__("cv2").COLOR_BGR2YCrCb)
+    import cv2
+    ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
     Y_gray = ycrcb[:, :, 0]
     var_map = compute_block_dct_variance(Y_gray)
     tau_low = float(cfg["ecc"]["tau_low"] or 50.0)
@@ -114,38 +117,45 @@ def run_full_experiment(cfg: dict) -> None:
 
     all_results: dict[str, dict] = {}
 
-    for attack_name, attack_fn in ATTACK_SUITE.items():
-        bers, ncs, psnrs, ssims = [], [], [], []
+    with Timer("full experiment"):
+        for attack_name, attack_fn in ATTACK_SUITE.items():
+            bers, ncs, psnrs, ssims = [], [], [], []
 
-        for img in images:
-            rate_map = _make_rate_map(img, cfg)
-            watermarked = embed_watermark(img, watermark, rate_map, engine, scheme)
-            attacked = attack_fn(watermarked)                # type: ignore[operator]
-            decoded = extract_watermark(attacked, rate_map, engine, n_bits, scheme)
+            for img in images:
+                rate_map = _make_rate_map(img, cfg)
+                watermarked = embed_watermark(img, watermark, rate_map, engine, scheme)
+                attacked = attack_fn(watermarked)                # type: ignore[operator]
+                decoded = extract_watermark(attacked, rate_map, engine, n_bits, scheme)
 
-            bers.append(bit_error_rate(watermark, decoded))
-            ncs.append(normalized_correlation(watermark, decoded))
-            psnrs.append(image_psnr(img, watermarked))
-            ssims.append(image_ssim(img, watermarked))
+                bers.append(bit_error_rate(watermark, decoded))
+                ncs.append(normalized_correlation(watermark, decoded))
+                psnrs.append(image_psnr(img, watermarked))
+                ssims.append(image_ssim(img, watermarked))
 
-        all_results[attack_name] = {
-            "BER_mean":  float(np.mean(bers)),
-            "BER_std":   float(np.std(bers)),
-            "NC_mean":   float(np.mean(ncs)),
-            "PSNR_mean": float(np.mean(psnrs)),
-            "SSIM_mean": float(np.mean(ssims)),
-        }
-        print(
-            f"  {attack_name:25s} | "
-            f"BER={np.mean(bers):.4f}  "
-            f"NC={np.mean(ncs):.4f}  "
-            f"PSNR={np.mean(psnrs):.2f}"
-        )
+            all_results[attack_name] = {
+                "BER_mean":  float(np.mean(bers)),
+                "BER_std":   float(np.std(bers)),
+                "NC_mean":   float(np.mean(ncs)),
+                "PSNR_mean": float(np.mean(psnrs)),
+                "SSIM_mean": float(np.mean(ssims)),
+            }
+            print(
+                f"  {attack_name:25s} | "
+                f"BER={np.mean(bers):.4f}  "
+                f"NC={np.mean(ncs):.4f}  "
+                f"PSNR={np.mean(psnrs):.2f}"
+            )
 
-    out_path = pathlib.Path(cfg["results"]["output_dir"]) / "full_results.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(all_results, indent=2))
-    print(f"\n[full] Results saved to {out_path}")
+    out_dir = pathlib.Path(cfg["results"]["output_dir"])
+    save_results(all_results, out_dir / "full_results.json")
+    print_results_table(all_results, title="Full Experiment — Adaptive ECC")
+    latex = to_latex_table(
+        all_results,
+        caption="Proposed adaptive-ECC scheme under various attacks.",
+        label="tab:full",
+    )
+    (out_dir / "table1.tex").write_text(latex)
+    print(f"[full] LaTeX table → {out_dir / 'table1.tex'}")
 
 
 def run_ablation_rate(cfg: dict) -> None:
@@ -178,9 +188,8 @@ def run_ablation_rate(cfg: dict) -> None:
 
             watermarked = embed_watermark(img, watermark, rate_map, engine, scheme)
             # Use JPEG q=50 as representative attack
-            import cv2 as _cv2
-            _, buf = _cv2.imencode(".jpg", watermarked, [int(_cv2.IMWRITE_JPEG_QUALITY), 50])
-            attacked = _cv2.imdecode(buf, _cv2.IMREAD_COLOR)
+            _, buf = cv2.imencode(".jpg", watermarked, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+            attacked = cv2.imdecode(buf, cv2.IMREAD_COLOR)
             decoded = extract_watermark(attacked, rate_map, engine, n_bits, scheme)
             bers.append(bit_error_rate(watermark, decoded))
 
@@ -188,10 +197,43 @@ def run_ablation_rate(cfg: dict) -> None:
         results[label] = {"BER_mean": float(np.mean(bers)), "BER_std": float(np.std(bers))}
         print(f"  {label}: BER = {np.mean(bers):.4f} ± {np.std(bers):.4f}")
 
-    out_path = pathlib.Path(cfg["results"]["output_dir"]) / "ablation_rate.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(results, indent=2))
-    print(f"[ablation_rate] Results saved to {out_path}")
+    out_dir = pathlib.Path(cfg["results"]["output_dir"])
+    save_results(results, out_dir / "ablation_rate.json")
+    print_results_table(results, title="Ablation — Fixed vs Adaptive ECC Rate")
+
+
+def run_baseline_comparison(cfg: dict) -> None:
+    """Compare proposed adaptive-ECC against LSB, SS, and fixed-rate ECC baselines."""
+    from src.baseline_comparison import run_baseline_comparison as _run
+
+    print("[baseline_comparison] Loading images …")
+    images = load_dataset(
+        cfg["data"]["ai_generated_path"],
+        limit=min(cfg["data"]["n_images"], 50),
+        image_size=tuple(cfg["data"]["image_size"]),
+    )
+
+    # Subset of attacks for baseline comparison (otherwise very slow)
+    subset_attacks = {
+        k: v for k, v in ATTACK_SUITE.items()
+        if k in ("jpeg_q50", "jpeg_q30", "gaussian_10", "crop_10pct", "regeneration_04")
+    }
+
+    results = _run(
+        cfg,
+        images,
+        n_bits=cfg["watermark"]["n_bits"],
+        seed=cfg["watermark"]["seed"],
+        attacks=subset_attacks,
+    )
+
+    out_dir = pathlib.Path(cfg["results"]["output_dir"])
+    save_results(results, out_dir / "baseline_comparison.json")
+
+    for method, method_results in results.items():
+        print_results_table(method_results, title=f"Baseline: {method}")
+
+    print(f"[baseline_comparison] Results saved to {out_dir / 'baseline_comparison.json'}")
 
 
 def run_smoke_test(_cfg: dict) -> None:
@@ -218,9 +260,11 @@ def run_smoke_test(_cfg: dict) -> None:
 
         ber = bit_error_rate(watermark, decoded)
         psnr = image_psnr(img, watermarked)
-        print(f"  Image {i}: BER={ber:.4f}  PSNR={psnr:.2f} dB")
+        ssim = image_ssim(img, watermarked)
+        print(f"  Image {i}: BER={ber:.4f}  PSNR={psnr:.2f} dB  SSIM={ssim:.4f}")
+        assert ber == 0.0, f"Smoke test FAILED on image {i}: BER={ber} (expected 0.0)"
 
-    print("[smoke_test] Passed — pipeline is functional.")
+    print("[smoke_test] ✓ Passed — pipeline is fully functional.")
 
 
 # ---------------------------------------------------------------------------
@@ -235,22 +279,24 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="smoke_test",
-        choices=["full", "ablation_rate", "calibrate", "smoke_test"],
+        choices=["full", "ablation_rate", "calibrate", "smoke_test", "baseline_comparison"],
         help=(
-            "smoke_test  — quick end-to-end check with synthetic images (default)\n"
-            "calibrate   — compute tau thresholds from the dataset\n"
-            "full        — run all attacks and save results\n"
-            "ablation_rate — sweep fixed ECC rates for Table 2\n"
+            "smoke_test          — quick end-to-end check with synthetic images (default)\n"
+            "calibrate           — compute tau thresholds from the dataset\n"
+            "full                — run all attacks and save results\n"
+            "ablation_rate       — sweep fixed ECC rates for Table 2\n"
+            "baseline_comparison — compare against LSB / SS / fixed-rate baselines\n"
         ),
     )
     args = parser.parse_args()
     cfg = _load_config(args.config)
 
     dispatch = {
-        "smoke_test":    run_smoke_test,
-        "calibrate":     run_calibration,
-        "full":          run_full_experiment,
-        "ablation_rate": run_ablation_rate,
+        "smoke_test":           run_smoke_test,
+        "calibrate":            run_calibration,
+        "full":                 run_full_experiment,
+        "ablation_rate":        run_ablation_rate,
+        "baseline_comparison":  run_baseline_comparison,
     }
     dispatch[args.mode](cfg)
 
