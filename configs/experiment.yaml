@@ -1,0 +1,34 @@
+data:
+  ai_generated_path: data/ai_generated/
+  natural_path: data/natural/
+  n_images: 500
+  image_size: [512, 512]
+
+watermark:
+  n_bits: 64
+  seed: 42
+
+ecc:
+  scheme: reed_solomon        # or: repetition (for ablation)
+  tau_low: null               # set by calibration; or hardcode after calibration run
+  tau_high: null
+  tau_percentile_low: 25
+  tau_percentile_high: 75
+  r_high: 0.75
+  r_mid: 0.50
+  r_low: 0.25
+
+embedding:
+  alpha: 0.05                 # strength — tune for PSNR >= 40 dB
+  dwt_wavelet: haar
+  dwt_levels: 2
+
+attacks:
+  jpeg_qualities: [30, 50, 70]
+  gaussian_sigmas: [5, 10, 20]
+  crop_fractions: [0.05, 0.10]
+  rotation_angles: [2.0, 5.0]
+  regeneration_strengths: [0.3, 0.4, 0.6]
+
+results:
+  output_dir: results/

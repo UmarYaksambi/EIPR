@@ -1,0 +1,18 @@
+numpy
+scipy
+scikit-image
+opencv-python
+pywavelets
+reedsolo
+Pillow
+pyyaml
+matplotlib
+seaborn
+jupyter
+
+
+# Optional for real regeneration attack:
+# diffusers
+# transformers
+# accelerate
+# torch6

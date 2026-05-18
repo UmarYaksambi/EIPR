@@ -1,0 +1,159 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
+
+# =========================
+# Virtual Environments
+# =========================
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+wandb/
+mlruns/
+lightning_logs/
+
+# =========================
+# Secrets / Config
+# =========================
+.env
+.env.*
+*.pem
+*.key
+secrets.yaml
+credentials.json
+
+# =========================
+# Data
+# =========================
+data/raw/
+data/processed/
+data/interim/
+datasets/
+downloads/
+*.csv
+*.tsv
+*.parquet
+*.h5
+*.hdf5
+*.db
+*.sqlite
+
+# Keep folder structure
+!data/.gitkeep
+
+# =========================
+# Model Artifacts
+# =========================
+checkpoints/
+models/
+weights/
+artifacts/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.joblib
+*.pkl
+*.pickle
+*.pb
+
+# =========================
+# Experiment Outputs
+# =========================
+results/
+outputs/
+runs/
+reports/
+figures/
+plots/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# =========================
+# Cache
+# =========================
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+coverage/
+htmlcov/
+.pyre/
+
+# =========================
+# Hugging Face / Transformers
+# =========================
+.huggingface/
+transformers_cache/
+hf_cache/
+
+# =========================
+# PyTorch
+# =========================
+torch_cache/
+*.tensorboard
+events.out.tfevents.*
+
+# =========================
+# Temporary Files
+# =========================
+tmp/
+temp/
+*.temp
+
+# =========================
+# Package Managers
+# =========================
+poetry.lock
+Pipfile.lock
+
+# =========================
+# Docker
+# =========================
+*.pid
+docker-compose.override.yml
