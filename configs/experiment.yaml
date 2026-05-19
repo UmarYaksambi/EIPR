@@ -9,25 +9,32 @@ watermark:
   seed: 42
 
 ecc:
-  scheme: reed_solomon        # or: repetition (for ablation)
-  tau_low: null               # set by calibration; or hardcode after calibration run
-  tau_high: null
+  scheme: reed_solomon        # or: repetition (for ablation §5.3)
+  tau_low: 2.8824               # set after calibration run; null → uses percentile defaults
+  tau_high: 263.4954
   tau_percentile_low: 25
   tau_percentile_high: 75
-  r_high: 0.75
-  r_mid: 0.50
-  r_low: 0.25
+  r_high: 0.75                # ECC rate for smooth (fragile) blocks
+  r_mid: 0.50                 # ECC rate for mid-texture blocks
+  r_low: 0.25                 # ECC rate for textured (robust) blocks
 
 embedding:
-  alpha: 0.05                 # strength — tune for PSNR >= 40 dB
-  dwt_wavelet: haar
-  dwt_levels: 2
+  # QIM quantisation step. Must >> JPEG luma quant step for zig-zag indices 1-3.
+  # Standard JPEG quant step at quality 50 is ~10-12; ALPHA=36 gives 3× safety margin.
+  # Raises PSNR penalty: at 512×512 expect PSNR ≈ 46-48 dB.
+  alpha: 36.0
+  # DCT zig-zag indices to embed into (0 = DC, skip; 1,2,3 = low-freq AC)
+  embed_coeff_indices: [1, 2, 3]
+  block_size: 8
 
 attacks:
   jpeg_qualities: [30, 50, 70]
   gaussian_sigmas: [5, 10, 20]
   crop_fractions: [0.05, 0.10]
   rotation_angles: [2.0, 5.0]
+  median_ksizes: [3, 5]
+  blur_ksizes: [3, 5]
+  brightness_deltas: [10, 20]
   regeneration_strengths: [0.3, 0.4, 0.6]
 
 results:

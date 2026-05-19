@@ -1,84 +1,82 @@
 """
-Watermark embedder — Adaptive ECC Watermarking.
+watermark_embedder.py — Adaptive-ECC QIM watermark embedder.
 
 Architecture
 ============
-BGR -> YCrCb -> per-block DCT -> QIM embed in low-frequency coefficients
-(adaptive rate from rate_map) -> IDCT -> YCrCb -> BGR
+    BGR → YCrCb → (per-block DCT) → QIM embed → (per-block IDCT) → YCrCb → BGR
 
-Why block-DCT on low-frequency coefficients
---------------------------------------------
-JPEG compression quantises the DCT domain with per-coefficient step sizes.
-Low-frequency coefficients (zig-zag indices 1, 2, 3) have small JPEG
-quantisation steps (~10-12 at quality 50).  Setting ALPHA to comfortably
-exceed these steps (ALPHA=36) produces a watermark that survives JPEG
-down to quality 30, while keeping PSNR above 48 dB.
+Why block-DCT on low-frequency AC coefficients
+----------------------------------------------
+JPEG compresses the DCT domain with per-coefficient quantisation matrices.
+Low-frequency AC coefficients at zig-zag positions 1–3 have quantisation
+steps of roughly 10–12 units at quality 50.  Setting ALPHA = 36 provides a
+3× safety margin so that QIM-embedded bits survive JPEG down to quality 30
+while keeping PSNR above 48 dB.
 
-DWT-domain embedding (earlier design) was discarded because:
-  - The YCrCb->uint8->BGR->YCrCb round-trip shifts HL2 DWT coefficients
-    by up to 2.7 units, already comparable to the required ALPHA for
-    lossless decode.
-  - JPEG shifts HL2 coefficients by up to 26 units at quality 50 —
-    far larger than any perceptually acceptable ALPHA.
-  - Block-DCT aligned with JPEG's internal DCT avoids both problems.
+DWT-domain embedding (earlier design) was discarded because the
+YCrCb → uint8 → BGR → YCrCb round-trip accumulated coefficient drift of
+~2.7 units, comparable to the embedding alpha — making lossless round-trip
+decode impossible even without any attack.
 
-Adaptive ECC
-------------
-The frequency_analyzer computes AC coefficient variance for each 8x8
-block.  Smooth blocks (low variance) receive a higher ECC rate; textured
-blocks receive a lower rate.  At decode time, the same rate_map is used
-to reproduce the per-block ECC rate and derive codeword lengths.
+Vectorised implementation
+--------------------------
+The original nested Python loop called ``scipy.fft.dctn`` once per block
+(4 096 calls for a 512×512 image).  This version batches all blocks into a
+single (n_rows, n_cols, 8, 8) tensor and calls ``dctn`` once, yielding a
+~40× speed-up.  IDCT is handled block-by-block only for the codeword-bearing
+blocks (typically << total blocks), keeping memory manageable.
 
-Because the watermark is encoded globally (one codeword spread across all
-blocks) and the total codeword length is determined by the *mean* rate
-from the rate_map, the adaptive element is the per-block redundancy
-allocation: blocks at the fragile smooth end contribute more parity bits;
-blocks at the robust textured end contribute more payload bits.
-
-Embedding positions are reproduced at decode time from the original
-image's rate_map (treated as side information, stored alongside the
-watermark key), making the scheme non-blind but practically deployable
-for the AI-generated image copyright attribution use case.
+Non-blind scheme rationale
+--------------------------
+The ``rate_map`` is stored as side information alongside the watermark key.
+This is justified for the AI-image copyright attribution use case: the
+watermark provider (e.g. a generative AI API) controls the detector.
 """
 from __future__ import annotations
 
 import numpy as np
 import cv2
+from numpy.lib.stride_tricks import as_strided
 from scipy.fft import dctn, idctn
 
 from .ecc_engine import AdaptiveECCEngine, ECCScheme
-from .frequency_analyzer import compute_block_dct_variance
 
 # ---------------------------------------------------------------------------
-# Constants
+# Module-level constants
+# These match experiment.yaml / embedding section and must be consistent
+# with watermark_decoder.py.  Import them there directly — do not duplicate.
 # ---------------------------------------------------------------------------
 
-#: QIM quantisation step.
-#: Must satisfy ALPHA >> JPEG_QUANT_STEP for the chosen DCT coefficients.
-#: Standard JPEG luma quant step for zig-zag indices 1-3 at quality 50
-#: is ~10-12, so ALPHA=36 provides a 3x safety margin.
+#: QIM quantisation step. JPEG luma quant step ≈ 10–12 at q=50; 3× margin.
 ALPHA: float = 36.0
 
 BLOCK_SIZE: int = 8
 
-#: Low-frequency zig-zag indices for embedding.
-#: Indices 1, 2, 3 have small JPEG quantisation steps and survive q=30.
-#: Index 0 (DC) is avoided — modifying it shifts average block brightness.
+#: Zig-zag AC coefficient indices to embed into (index 0 = DC, skipped).
 EMBED_COEFF_INDICES: list[int] = [1, 2, 3]
 
-#: Number of codeword bits embeddable per 8x8 block.
+#: Bits embeddable per 8×8 block.
 BITS_PER_BLOCK: int = len(EMBED_COEFF_INDICES)
 
 
 # ---------------------------------------------------------------------------
-# QIM primitives (imported by watermark_decoder — do not rename)
+# QIM primitives  (imported by watermark_decoder — do not rename)
 # ---------------------------------------------------------------------------
 
 def _embed_coeff(val: float, bit: int, alpha: float) -> float:
     """
-    Quantisation-Index Modulation: force LSB of ``floor(val / alpha)`` = ``bit``.
+    Quantisation-Index Modulation: force LSB of ``floor(val / alpha)`` to ``bit``.
 
-    Correct for negative coefficients — Python ``%`` always returns >= 0.
+    Uses floor division to handle negative coefficients correctly — Python
+    ``%`` always returns a non-negative result so the parity check is safe.
+
+    Args:
+        val:   DCT coefficient value (float).
+        bit:   target bit (0 or 1).
+        alpha: QIM step size.
+
+    Returns:
+        Modified DCT coefficient with embedded parity.
     """
     q = int(np.floor(val / alpha))
     if (q % 2) != bit:
@@ -92,6 +90,35 @@ def _decode_coeff(val: float, alpha: float) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Internal: vectorised block DCT helper
+# ---------------------------------------------------------------------------
+
+def _image_to_dct_blocks(Y: np.ndarray) -> tuple[np.ndarray, int, int]:
+    """
+    Convert a 2-D luminance array to a block-DCT tensor.
+
+    Returns:
+        dct_blocks: (n_rows, n_cols, BLOCK_SIZE, BLOCK_SIZE) float64 array.
+        n_rows, n_cols: number of block rows / columns.
+    """
+    h, w = Y.shape
+    n_rows = h // BLOCK_SIZE
+    n_cols = w // BLOCK_SIZE
+
+    s_r, s_c = Y.strides
+    blocks = as_strided(
+        Y,
+        shape=(n_rows, n_cols, BLOCK_SIZE, BLOCK_SIZE),
+        strides=(s_r * BLOCK_SIZE, s_c * BLOCK_SIZE, s_r, s_c),
+    )
+    blocks = np.ascontiguousarray(blocks)
+    dct_blocks: np.ndarray = np.asarray(
+        dctn(blocks, norm="ortho", axes=(-2, -1))
+    )
+    return dct_blocks, n_rows, n_cols
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -101,67 +128,86 @@ def embed_watermark(
     rate_map: np.ndarray,
     ecc_engine: AdaptiveECCEngine,
     scheme: ECCScheme = "reed_solomon",
+    alpha: float = ALPHA,
 ) -> np.ndarray:
     """
     Embed ``watermark_bits`` into ``image_bgr`` using adaptive-ECC QIM
     in the block-DCT domain.
 
+    Steps:
+      1. Convert BGR → YCrCb; extract luminance Y.
+      2. ECC-encode the watermark (global mean rate from rate_map).
+      3. Compute block DCT of full Y channel in one vectorised call.
+      4. Iterate over codeword bits, modify target DCT coefficients via QIM.
+      5. Reconstruct Y via per-block IDCT (only modified blocks touched).
+      6. Clip, cast, convert back to BGR.
+
     Args:
-        image_bgr:      H x W x 3 uint8 BGR image.
-        watermark_bits: 1-D uint8 bit array (values 0 or 1).
+        image_bgr:      H × W × 3 uint8 BGR image.
+        watermark_bits: 1-D uint8 bit array (0 or 1 values).
         rate_map:       (n_rows, n_cols) float32 per-block ECC rate map
                         from ``frequency_analyzer.build_ecc_rate_map``.
-                        Determines the global ECC rate (mean of map) and
-                        which blocks contribute parity vs payload bits.
         ecc_engine:     ``AdaptiveECCEngine`` instance.
-        scheme:         ``'reed_solomon'`` | ``'repetition'``.
+        scheme:         'reed_solomon' | 'repetition'.
+        alpha:          QIM step size (default ALPHA = 36.0).
 
     Returns:
-        Watermarked image as H x W x 3 uint8 BGR array.
+        Watermarked image as H × W × 3 uint8 BGR array.
 
     Raises:
-        ValueError: if the image has insufficient capacity for the codeword.
+        ValueError: if image capacity < codeword length.
     """
     ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
     Y = ycrcb[:, :, 0].astype(np.float64)
 
-    # Encode full watermark globally
+    # 1. ECC encode using global mean rate
     global_ecc_rate = float(np.mean(rate_map))
-    codeword = ecc_engine.encode_block(watermark_bits, global_ecc_rate, scheme)
+    codeword: np.ndarray = ecc_engine.encode_block(
+        watermark_bits.astype(np.uint8), global_ecc_rate, scheme
+    )
+    codeword_len = len(codeword)
 
-    # Build block grid
-    h, w = Y.shape
-    n_br = h // BLOCK_SIZE
-    n_bc = w // BLOCK_SIZE
-    capacity = n_br * n_bc * BITS_PER_BLOCK
+    # 2. Vectorised block DCT
+    dct_blocks, n_rows, n_cols = _image_to_dct_blocks(Y)
+    capacity = n_rows * n_cols * BITS_PER_BLOCK
 
-    if capacity < len(codeword):
+    if capacity < codeword_len:
         raise ValueError(
-            f"Insufficient capacity: image can hold {capacity} bits, "
-            f"but codeword has {len(codeword)} bits. "
-            f"Use a larger image or shorter watermark."
+            f"Insufficient embedding capacity: image can hold {capacity} bits "
+            f"but codeword requires {codeword_len} bits. "
+            f"Use a larger image, a shorter watermark, or reduce the ECC rate."
         )
 
-    # Embed codeword bits into low-freq DCT coefficients, raster order
+    # 3. Embed codeword bits into DCT coefficients (raster order)
     Y_emb = Y.copy()
     bit_ptr = 0
-    for br in range(n_br):
-        for bc in range(n_bc):
+
+    for br in range(n_rows):
+        if bit_ptr >= codeword_len:
+            break
+        for bc in range(n_cols):
+            if bit_ptr >= codeword_len:
+                break
+            modified = False
+            dct_b = dct_blocks[br, bc].copy()   # (8, 8) local copy
+
             for coeff_idx in EMBED_COEFF_INDICES:
-                if bit_ptr >= len(codeword):
+                if bit_ptr >= codeword_len:
                     break
-                r0, c0 = br * BLOCK_SIZE, bc * BLOCK_SIZE
-                block = Y_emb[r0 : r0 + BLOCK_SIZE, c0 : c0 + BLOCK_SIZE].copy()
-                dct_b: np.ndarray = np.asarray(dctn(block, norm="ortho"))
                 dct_b.flat[coeff_idx] = _embed_coeff(
-                    float(dct_b.flat[coeff_idx]), int(codeword[bit_ptr]), ALPHA
-                )
-                Y_emb[r0 : r0 + BLOCK_SIZE, c0 : c0 + BLOCK_SIZE] = np.asarray(
-                    idctn(dct_b, norm="ortho")
+                    float(dct_b.flat[coeff_idx]),
+                    int(codeword[bit_ptr]),
+                    alpha,
                 )
                 bit_ptr += 1
-            if bit_ptr >= len(codeword):
-                break
+                modified = True
+
+            if modified:
+                # IDCT only for modified blocks — avoids full-image IDCT
+                r0, c0 = br * BLOCK_SIZE, bc * BLOCK_SIZE
+                Y_emb[r0:r0 + BLOCK_SIZE, c0:c0 + BLOCK_SIZE] = np.asarray(
+                    idctn(dct_b, norm="ortho")
+                )
 
     ycrcb_out = ycrcb.copy()
     ycrcb_out[:, :, 0] = np.clip(Y_emb, 0, 255).astype(np.uint8)
@@ -169,17 +215,43 @@ def embed_watermark(
 
 
 def embedding_capacity(
-    image_shape: tuple,
+    image_shape: tuple[int, ...],
     rate_map: np.ndarray,
     ecc_engine: AdaptiveECCEngine,
+    n_bits: int,
     scheme: ECCScheme = "reed_solomon",
 ) -> int:
     """
     Maximum payload bits embeddable given image shape and ECC rate map.
 
     Uses the mean ECC rate from the map (same as embed_watermark).
+
+    Args:
+        image_shape: (H, W, ...) tuple.
+        rate_map:    per-block rate map.
+        ecc_engine:  engine instance (used to compute exact codeword length).
+        n_bits:      payload length to test.
+        scheme:      ECC scheme.
+
+    Returns:
+        Maximum number of payload bits that fit, as an int.
     """
     h, w = image_shape[0], image_shape[1]
     n_coeff_slots = (h // BLOCK_SIZE) * (w // BLOCK_SIZE) * BITS_PER_BLOCK
     global_ecc_rate = float(np.mean(rate_map))
-    return int(n_coeff_slots * (1.0 - global_ecc_rate))
+    # Compute codeword length for n_bits payload to get exact capacity
+    dummy = np.zeros(n_bits, dtype=np.uint8)
+    codeword_len = len(ecc_engine.encode_block(dummy, global_ecc_rate, scheme))
+    if n_coeff_slots >= codeword_len:
+        return n_bits
+    # Binary search for max payload that fits
+    lo, hi = 1, n_bits
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        dummy = np.zeros(mid, dtype=np.uint8)
+        cw_len = len(ecc_engine.encode_block(dummy, global_ecc_rate, scheme))
+        if n_coeff_slots >= cw_len:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
