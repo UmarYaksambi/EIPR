@@ -5,7 +5,7 @@ Design
 ------
 The engine is *stateless* between calls: ECC rate and payload length are
 supplied per-call from the rate_map (built by frequency_analyzer).  This
-keeps the encoder/decoder perfectly synchronized via the stored rate_map
+keeps the encoder/decoder perfectly synchronised via the stored rate_map
 alone, without any out-of-band state.
 
 Reed-Solomon implementation
@@ -14,20 +14,24 @@ reedsolo operates on *bytes*.  The encode path packs payload bits to bytes,
 appends RS parity bytes, then unpacks back to bits for QIM embedding.
 
 Key invariant preserved throughout:
-    len(codeword_bits) = len(payload_bytes) * 8 + nsym * 8
-    nsym = max(2, round(n_payload_bytes * ecc_rate / (1 - ecc_rate)))
+    nsym  = max(2, int(n_payload_bytes * ecc_rate / (1 - ecc_rate)))
+    n_total_bytes = n_payload_bytes + nsym   [must be ≤ 255 for GF(256)]
 
-Decoding is attempted with reedsolo's Berlekamp-Massey decoder; on
-uncorrectable errors the raw (possibly corrupted) bits are returned,
-incurring a BER penalty that is faithfully reported in the paper's
-robustness table.
+Decoding infers nsym from the received codeword length:
+    nsym = total_received_bytes - n_payload_bytes
+This is correct as long as the full codeword is received (normal case).
+On uncorrectable errors the raw bits are returned (honest BER penalty).
 
-Bug fixes vs original
----------------------
-* Zero-length trim_len guard in _rs_decode (packbits([]) raised ValueError).
-* nsym clamped to [2, n_data_bytes - 1] so reedsolo never raises on
-  degenerate inputs (e.g. very short payloads in smoke test).
-* _pad_to_byte always returns a copy — never mutates caller's array.
+Bug fixes vs first revision
+----------------------------
+* _nsym() had an incorrect upper cap of (n_data_bytes - 1), which clipped
+  nsym from 24 → 7 at rate=0.75 and 8 → 7 at rate=0.50.  This made every
+  rate ≥ 0.50 produce identical codeword lengths, destroying the adaptive
+  ECC's advantage and inflating BER on median/blur/regeneration attacks.
+  The only valid cap is the GF(256) field size: n_total ≤ 255 bytes.
+* _rs_decode() is restored to the original simple formula
+  (nsym = received_bytes - n_payload_bytes) which is exact, plus the
+  zero-length guard added in the first revision.
 """
 from __future__ import annotations
 
@@ -36,6 +40,9 @@ from reedsolo import RSCodec, ReedSolomonError
 from typing import Literal
 
 ECCScheme = Literal["reed_solomon", "repetition"]
+
+# GF(256) constraint: total RS codeword must fit in one symbol alphabet
+_GF256_MAX_TOTAL: int = 255
 
 
 class AdaptiveECCEngine:
@@ -61,8 +68,8 @@ class AdaptiveECCEngine:
 
         Args:
             payload_bits: 1-D uint8 bit array (values 0 or 1).
-            ecc_rate:     redundancy fraction ∈ [0, 1).
-                          e.g. 0.5 ⟹ 50 % redundancy (rate-½ code).
+            ecc_rate:     redundancy fraction in [0, 1).
+                          e.g. 0.75 → 75 % parity, 25 % data (rate-¼ code).
             scheme:       'reed_solomon' | 'repetition'.
 
         Returns:
@@ -107,9 +114,7 @@ class AdaptiveECCEngine:
             reps = max(1, round(1.0 / max(1e-9, 1.0 - ecc_rate)))
             usable = n_payload * reps
             clipped = received_bits[:usable]
-            # Majority-vote over repetitions
             if len(clipped) < usable:
-                # Pad with 0 if fewer bits received than expected
                 clipped = np.concatenate(
                     [clipped, np.zeros(usable - len(clipped), dtype=np.uint8)]
                 )
@@ -139,27 +144,29 @@ class AdaptiveECCEngine:
         """
         Attempt RS error-correction; fall back to raw truncated bits on failure.
 
-        The fallback is intentional — it preserves BER metrics rather than
+        nsym is inferred as (total_received_bytes - n_payload_bytes), which
+        exactly mirrors what the encoder produced.  This avoids any rate
+        arithmetic on the decoder side — the codeword length is self-describing.
+
+        The fallback is intentional: it preserves BER metrics rather than
         raising exceptions mid-experiment.
         """
-        # Trim to byte boundary
+        # --- Guard: need at least one complete byte -----------------------
         trim_len = len(bits) - (len(bits) % 8)
         if trim_len == 0:
-            # No complete byte received — return zeros (worst-case BER)
             return np.zeros(n_payload, dtype=np.uint8)
 
         received_bytes = np.packbits(bits[:trim_len])
         n_payload_bytes = (n_payload + 7) // 8
-        n_received = len(received_bytes)
 
-        # nsym must be consistent with encoder; derive from data length
-        n_data_bytes = n_received - self._nsym(n_payload_bytes, ecc_rate)
-        # Guard: if received packet is too short, skip RS entirely
-        if n_data_bytes <= 0 or n_received <= 2:
+        # Guard: received packet shorter than or equal to payload alone
+        if len(received_bytes) <= n_payload_bytes:
             return np.unpackbits(received_bytes)[:n_payload]
 
-        nsym = max(2, n_received - n_data_bytes)
-        nsym = min(nsym, n_received - 1)  # reedsolo requires at least 1 data byte
+        # nsym is exactly the surplus over the data bytes
+        nsym = len(received_bytes) - n_payload_bytes
+        nsym = min(nsym, _GF256_MAX_TOTAL - n_payload_bytes)  # GF(256) safety
+        nsym = max(2, nsym)
 
         try:
             rsc = RSCodec(nsym)
@@ -179,17 +186,23 @@ class AdaptiveECCEngine:
     @staticmethod
     def _nsym(n_data_bytes: int, ecc_rate: float) -> int:
         """
-        Number of RS parity *bytes* for a given data-byte count and ECC rate.
+        Number of RS parity bytes for a given data-byte count and ECC rate.
 
         Derivation:
-            rate = n_data / (n_data + nsym)
-            ⟹  nsym = n_data * ecc_rate / (1 - ecc_rate)
+            ecc_rate = nsym / (n_data + nsym)
+            => nsym = n_data * ecc_rate / (1 - ecc_rate)
 
-        Clamped to [2, n_data_bytes - 1] so reedsolo never receives illegal
-        arguments (nsym ≥ 1 and at least 1 data byte must remain).
+        Lower bound: 2 (minimum for any RS correction capability).
+        Upper bound: GF(256) field constraint — total codeword ≤ 255 bytes.
+
+        Note: the previous revision incorrectly applied an upper bound of
+        (n_data_bytes - 1), which silently clipped nsym from 24 → 7 at
+        rate=0.75, making rates 0.50 and 0.75 indistinguishable.
         """
         raw = n_data_bytes * ecc_rate / max(1e-9, 1.0 - ecc_rate)
-        return int(np.clip(round(raw), 2, max(2, n_data_bytes - 1)))
+        # GF(256) safety: n_data + nsym must not exceed 255
+        max_nsym = max(2, _GF256_MAX_TOTAL - n_data_bytes)
+        return int(np.clip(int(raw), 2, max_nsym))
 
     @staticmethod
     def _pad_to_byte(bits: np.ndarray) -> np.ndarray:

@@ -80,9 +80,11 @@ class FixedRateWatermarker:
         rate_map: np.ndarray,
         n_bits: int,
         scheme: str = "reed_solomon",
+        original_bgr: np.ndarray | None = None,
     ) -> np.ndarray:
         return extract_watermark(
-            image_bgr, rate_map, self._engine, n_bits, scheme  # type: ignore[arg-type]
+            image_bgr, rate_map, self._engine, n_bits, scheme,  # type: ignore[arg-type]
+            original_bgr=original_bgr,
         )
 
 
@@ -236,6 +238,16 @@ def run_baseline_comparison(
     """
     Evaluate all baselines + proposed adaptive-ECC over *images* under *attacks*.
 
+    Changes vs first revision
+    -------------------------
+    * Adaptive-ECC now embeds the synchronisation template (embed_sync) before
+      QIM embedding, and passes the watermarked original (``original_bgr=wm``)
+      to ``extract_watermark`` for Fourier-Mellin geometric correction.
+    * Fixed-rate baselines also receive the original for geometric correction
+      (fair comparison — they share the same sync + QIM pipeline).
+    * Spread-spectrum already subtracts the original, so no extra correction
+      step is needed there.
+
     Returns:
         Nested dict::
 
@@ -253,6 +265,8 @@ def run_baseline_comparison(
         _tqdm_available = True
     except ImportError:
         _tqdm_available = False
+
+    from .geometric_sync import embed_sync  # noqa: F401 (side-import for sync)
 
     if attacks is None:
         attacks = BASELINE_ATTACKS
@@ -298,30 +312,36 @@ def run_baseline_comparison(
         )
 
         for img in img_iter:
+            # Add sync template before any embedding (shared across QIM methods)
+            img_sync = embed_sync(img)
+
             # ---- Proposed adaptive-ECC ----------------------------------
-            rate_map = _adaptive_rate_map(img)
-            wm = embed_watermark(img, watermark, rate_map, engine, scheme)  # type: ignore[arg-type]
-            attacked = attack_fn(wm)                                        # type: ignore[operator]
-            dec = extract_watermark(attacked, rate_map, engine, n_bits, scheme)  # type: ignore[arg-type]
+            rate_map = _adaptive_rate_map(img_sync)
+            wm = embed_watermark(img_sync, watermark, rate_map, engine, scheme)  # type: ignore[arg-type]
+            attacked = attack_fn(wm)                                              # type: ignore[operator]
+            # Pass original watermarked image for geometric correction
+            dec = extract_watermark(                                               # type: ignore[arg-type]
+                attacked, rate_map, engine, n_bits, scheme, original_bgr=wm
+            )
             adap_bers.append(bit_error_rate(watermark, dec))
             adap_psnrs.append(image_psnr(img, wm))
 
             # ---- Fixed-rate ECC baselines --------------------------------
             for key, fb in fixed_bls.items():
-                wm_f, rm_f = fb.embed(img, watermark, scheme)
-                att_f = attack_fn(wm_f)                                     # type: ignore[operator]
-                dec_f = fb.extract(att_f, rm_f, n_bits, scheme)
+                wm_f, rm_f = fb.embed(img_sync, watermark, scheme)
+                att_f = attack_fn(wm_f)                                           # type: ignore[operator]
+                dec_f = fb.extract(att_f, rm_f, n_bits, scheme, original_bgr=wm_f)
                 fixed_bers[key].append(bit_error_rate(watermark, dec_f))
 
-            # ---- LSB ----------------------------------------------------
+            # ---- LSB (no geometric correction — LSB has no sync) ---------
             wm_lsb = lsb_bl.embed(img, watermark)
-            att_lsb = attack_fn(wm_lsb)                                    # type: ignore[operator]
+            att_lsb = attack_fn(wm_lsb)                                          # type: ignore[operator]
             dec_lsb = lsb_bl.extract(att_lsb, n_bits)
             lsb_bers.append(bit_error_rate(watermark, dec_lsb))
 
-            # ---- Spread-Spectrum ----------------------------------------
+            # ---- Spread-Spectrum (already non-blind; subtracts original) -
             wm_ss = ss_bl.embed(img, watermark)
-            att_ss = attack_fn(wm_ss)                                       # type: ignore[operator]
+            att_ss = attack_fn(wm_ss)                                             # type: ignore[operator]
             dec_ss = ss_bl.extract(att_ss, img, n_bits)
             ss_bers.append(bit_error_rate(watermark, dec_ss))
 
