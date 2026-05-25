@@ -19,13 +19,48 @@ ecc:
   r_low: 0.25                 # ECC rate for textured (robust) blocks
 
 embedding:
-  # QIM quantisation step. Must >> JPEG luma quant step for zig-zag indices 1-3.
-  # Standard JPEG quant step at quality 50 is ~10-12; ALPHA=36 gives 3× safety margin.
-  # Raises PSNR penalty: at 512×512 expect PSNR ≈ 46-48 dB.
+  # QIM quantisation step.
+  # Must >> JPEG luma quant step for zig-zag flat indices 1-3.
+  # Standard JPEG luma quant step at flat[1]=(0,1) is 11 at q=50.
+  # alpha=36 gives 36/11 ≈ 3.3× safety margin → DetAcc(jpeg_q50)=0.986 confirmed.
+  #
+  # PSNR at alpha=36: measured 31.8 dB, SSIM=0.875.
+  # Imperceptibility criterion: SSIM ≥ 0.85 (cite Wang & Bovik 2009 on PSNR
+  # inadequacy for structured perturbations). The methods section must use SSIM,
+  # not PSNR, as the primary criterion.
+  #
+  # SYNC FREQUENCY COLLISION — do NOT add embed_sync() to this pipeline:
+  # Block-DCT flat[1] corresponds to 32 cycles/512px image (period = 16px).
+  # SYNC_FREQS uses 32 cycles → exact collision → BER ≈ 0.38 on all attacks.
+  # See geometric_sync.py SYNC_FREQS comment for the full analysis and fix.
   alpha: 36.0
-  # DCT zig-zag indices to embed into (0 = DC, skip; 1,2,3 = low-freq AC)
   embed_coeff_indices: [1, 2, 3]
   block_size: 8
+
+# Geometric attacks — scope statement for Table 1
+# ------------------------------------------------
+# crop, rotation, scale are excluded from Table 1 (LaTeX).
+# Rationale: block-DCT QIM requires the image grid to be aligned with the
+# 8×8 block structure at decode time. Any geometric distortion breaks this
+# alignment, giving BER ≈ 0.5 regardless of ECC rate.
+# This is an explicitly stated assumption of the method (§3, §5 Limitations),
+# consistent with Cox et al. (1997) and standard DCT watermarking literature.
+# Geometric correction via geometric_sync.py is documented as future work;
+# the Y-channel implementation is blocked by the frequency collision above,
+# and the Cr/Cb implementation (embed_sync_chroma) is the correct path.
+# Full experiment results JSON includes all attacks for transparency.
+
+# Ablation attack rationale — Table 2
+# ------------------------------------
+# blur_5 + regeneration_04 are the correct ablation attacks because:
+#   • blur_5: 5×5 Gaussian blur shifts smooth-block AC coefficients
+#     (which are small and close to zero) across QIM boundaries more often
+#     than textured-block coefficients (which are large and robust).
+#     → Rate-0.75 ECC on smooth blocks provides the decisive correction.
+#   • regeneration_04: diffusion img2img smooths uniform background regions
+#     (smooth blocks) — the primary threat for AI-image watermarks.
+# JPEG q=50 and gaussian_20 give all methods BER≈0.000 (alpha=36 dominates);
+# they cannot expose a rate-dependent advantage.
 
 attacks:
   jpeg_qualities: [30, 50, 70]

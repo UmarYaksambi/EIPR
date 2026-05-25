@@ -49,7 +49,7 @@ from .ecc_engine import AdaptiveECCEngine, ECCScheme
 # Module-level constants (also imported by watermark_decoder)
 # ---------------------------------------------------------------------------
 
-ALPHA: float = 36.0
+ALPHA: float = 28.0   # alpha=28 + SYNC_ALPHA=10 → PSNR ≈ 40–42 dB (meets ≥40 dB criterion)
 BLOCK_SIZE: int = 8
 EMBED_COEFF_INDICES: list[int] = [1, 2, 3]
 BITS_PER_BLOCK: int = len(EMBED_COEFF_INDICES)

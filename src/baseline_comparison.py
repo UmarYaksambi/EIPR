@@ -219,8 +219,34 @@ class SSWatermarker:
         energy_order  = np.argsort(np.abs(flat_orig[candidate_idx]))[::-1]
         abs_idx = candidate_idx[energy_order[:n_coeffs]]
 
-        carrier = self._carrier(n_bits, n_coeffs)          # (n_bits, n_coeffs)
-        correlations = carrier @ diff[abs_idx]              # (n_bits,)
+        carrier = self._carrier(n_bits, n_coeffs)
+        correlations = carrier @ diff[abs_idx]
+        return (correlations >= 0).astype(np.uint8)
+
+    def extract_blind(self, image_bgr: np.ndarray, n_bits: int) -> np.ndarray:
+        """
+        Blind correlation decoder — does NOT use the original image.
+
+        Correlates the PN carrier directly against the received DCT coefficients
+        without subtracting the host image.  Expected BER ≈ 0.45–0.50.
+
+        Included as ``spread_spectrum_blind`` in Table 3 to show that SS's low
+        BER (non-blind row) is contingent on storing the original at the detector,
+        a much stronger requirement than our method's key-only detection.
+        """
+        def _dct_flat(img: np.ndarray) -> np.ndarray:
+            ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+            Y = ycrcb[:, :, 0].astype(np.float64)
+            return np.asarray(dctn(Y, norm="ortho")).flatten()
+
+        flat_recv = _dct_flat(image_bgr)
+        n_coeffs  = n_bits * 8
+        candidate_idx = self._mid_freq_indices(len(flat_recv), n_coeffs)
+        energy_order  = np.argsort(np.abs(flat_recv[candidate_idx]))[::-1]
+        abs_idx = candidate_idx[energy_order[:n_coeffs]]
+
+        carrier      = self._carrier(n_bits, n_coeffs)
+        correlations = carrier @ flat_recv[abs_idx]
         return (correlations >= 0).astype(np.uint8)
 
 
@@ -238,15 +264,12 @@ def run_baseline_comparison(
     """
     Evaluate all baselines + proposed adaptive-ECC over *images* under *attacks*.
 
-    Changes vs first revision
-    -------------------------
-    * Adaptive-ECC now embeds the synchronisation template (embed_sync) before
-      QIM embedding, and passes the watermarked original (``original_bgr=wm``)
-      to ``extract_watermark`` for Fourier-Mellin geometric correction.
-    * Fixed-rate baselines also receive the original for geometric correction
-      (fair comparison — they share the same sync + QIM pipeline).
-    * Spread-spectrum already subtracts the original, so no extra correction
-      step is needed there.
+    Pipeline (identical to run_full_experiment — no geometric sync):
+      embed_watermark → attack → extract_watermark
+
+    embed_sync() is deliberately excluded: SYNC_FREQS at 32 cycles/image collides
+    with QIM flat index 1 (also 32 cycles for 512×512/8×8), corrupting QIM decisions.
+    See geometric_sync.py SYNC_FREQS comment for the full analysis.
 
     Returns:
         Nested dict::
@@ -258,6 +281,7 @@ def run_baseline_comparison(
               "fixed_rate_0.75": {...},
               "lsb":             {...},
               "spread_spectrum": {...},
+              "spread_spectrum_blind": {...},
             }
     """
     try:
@@ -266,7 +290,10 @@ def run_baseline_comparison(
     except ImportError:
         _tqdm_available = False
 
-    from .geometric_sync import embed_sync  # noqa: F401 (side-import for sync)
+    # NOTE: embed_sync is deliberately NOT called here.
+    # SYNC_FREQS at 32 cycles/image collides with QIM flat index 1 (also 32 cycles/image
+    # for 512×512 / 8×8 blocks), corrupting QIM decisions and producing BER≈0.38.
+    # See geometric_sync.py for the full collision analysis.
 
     if attacks is None:
         attacks = BASELINE_ATTACKS
@@ -287,7 +314,7 @@ def run_baseline_comparison(
         "fixed_rate_0.75": FixedRateWatermarker(0.75),
     }
 
-    method_keys = ["adaptive_ecc", *fixed_bls.keys(), "lsb", "spread_spectrum"]
+    method_keys = ["adaptive_ecc", *fixed_bls.keys(), "lsb", "spread_spectrum", "spread_spectrum_blind"]
     all_results: dict[str, dict[str, dict]] = {k: {} for k in method_keys}
 
     def _adaptive_rate_map(img: np.ndarray) -> np.ndarray:
@@ -303,8 +330,9 @@ def run_baseline_comparison(
         adap_bers:  list[float] = []
         adap_psnrs: list[float] = []
         fixed_bers: dict[str, list[float]] = {k: [] for k in fixed_bls}
-        lsb_bers:   list[float] = []
-        ss_bers:    list[float] = []
+        lsb_bers:      list[float] = []
+        ss_bers:       list[float] = []
+        ss_blind_bers: list[float] = []
 
         img_iter = (
             tqdm(images, desc=f"  {attack_name}", leave=False)
@@ -312,25 +340,21 @@ def run_baseline_comparison(
         )
 
         for img in img_iter:
-            # Add sync template before any embedding (shared across QIM methods)
-            img_sync = embed_sync(img)
-
             # ---- Proposed adaptive-ECC ----------------------------------
-            rate_map = _adaptive_rate_map(img_sync)
-            wm = embed_watermark(img_sync, watermark, rate_map, engine, scheme)  # type: ignore[arg-type]
-            attacked = attack_fn(wm)                                              # type: ignore[operator]
-            # Pass original watermarked image for geometric correction
-            dec = extract_watermark(                                               # type: ignore[arg-type]
-                attacked, rate_map, engine, n_bits, scheme, original_bgr=wm
+            rate_map = _adaptive_rate_map(img)
+            wm = embed_watermark(img, watermark, rate_map, engine, scheme)  # type: ignore[arg-type]
+            attacked = attack_fn(wm)                                         # type: ignore[operator]
+            dec = extract_watermark(                                          # type: ignore[arg-type]
+                attacked, rate_map, engine, n_bits, scheme,
             )
             adap_bers.append(bit_error_rate(watermark, dec))
             adap_psnrs.append(image_psnr(img, wm))
 
             # ---- Fixed-rate ECC baselines --------------------------------
             for key, fb in fixed_bls.items():
-                wm_f, rm_f = fb.embed(img_sync, watermark, scheme)
-                att_f = attack_fn(wm_f)                                           # type: ignore[operator]
-                dec_f = fb.extract(att_f, rm_f, n_bits, scheme, original_bgr=wm_f)
+                wm_f, rm_f = fb.embed(img, watermark, scheme)
+                att_f = attack_fn(wm_f)                                      # type: ignore[operator]
+                dec_f = fb.extract(att_f, rm_f, n_bits, scheme)
                 fixed_bers[key].append(bit_error_rate(watermark, dec_f))
 
             # ---- LSB (no geometric correction — LSB has no sync) ---------
@@ -339,11 +363,15 @@ def run_baseline_comparison(
             dec_lsb = lsb_bl.extract(att_lsb, n_bits)
             lsb_bers.append(bit_error_rate(watermark, dec_lsb))
 
-            # ---- Spread-Spectrum (already non-blind; subtracts original) -
+            # ---- Spread-Spectrum (non-blind; subtracts original) ---------
             wm_ss = ss_bl.embed(img, watermark)
-            att_ss = attack_fn(wm_ss)                                             # type: ignore[operator]
+            att_ss = attack_fn(wm_ss)                                        # type: ignore[operator]
             dec_ss = ss_bl.extract(att_ss, img, n_bits)
             ss_bers.append(bit_error_rate(watermark, dec_ss))
+
+            # ---- Spread-Spectrum blind (no original) ---------------------
+            dec_ss_blind = ss_bl.extract_blind(att_ss, n_bits)
+            ss_blind_bers.append(bit_error_rate(watermark, dec_ss_blind))
 
         # Aggregate
         all_results["adaptive_ecc"][attack_name] = {
@@ -363,6 +391,10 @@ def run_baseline_comparison(
         all_results["spread_spectrum"][attack_name] = {
             "BER_mean": float(np.mean(ss_bers)),
             "BER_std":  float(np.std(ss_bers)),
+        }
+        all_results["spread_spectrum_blind"][attack_name] = {
+            "BER_mean": float(np.mean(ss_blind_bers)),
+            "BER_std":  float(np.std(ss_blind_bers)),
         }
 
     return all_results
