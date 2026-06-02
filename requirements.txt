@@ -11,8 +11,8 @@ seaborn>=0.12
 jupyter>=1.0
 tqdm>=4.65
 
-# Optional — required only for real regeneration attack
-# torch>=2.0
-# diffusers>=0.27
-# transformers>=4.40
-# accelerate>=0.27
+# Required for real regeneration attack (HuggingFace Stable Diffusion)
+torch>=2.0
+diffusers>=0.27
+transformers>=4.40
+accelerate>=0.27
