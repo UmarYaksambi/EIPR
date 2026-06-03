@@ -1,4 +1,3 @@
-# src/watermark_embedder.py
 from __future__ import annotations
 
 import numpy as np
@@ -11,7 +10,7 @@ from .geometric_sync import embed_sync_chroma
 
 ALPHA: float = 28.0
 BLOCK_SIZE: int = 8
-EMBED_COEFF_INDICES: list[int] = [0, 1, 2]
+EMBED_COEFF_INDICES: list[int] = [1, 2, 3]
 BITS_PER_BLOCK: int = len(EMBED_COEFF_INDICES)
 
 def _embed_coeff(val: float, bit: int, alpha: float) -> float:
@@ -43,21 +42,18 @@ def _embed_tier(
     tier_coords: list[tuple[int, int]],
     codeword: np.ndarray,
     alpha: float,
-    n_cols: int,
 ) -> None:
     codeword_len = len(codeword)
+    bit_idx = 0
 
     for (br, bc) in tier_coords:
         dct_b = dct_blocks[br, bc].copy()
-        
-        # Spatial phase locking: phase depends purely on spatial coordinate
-        abs_block_idx = br * n_cols + bc
-        
-        for i, coeff_idx in enumerate(EMBED_COEFF_INDICES):
-            p = (abs_block_idx * BITS_PER_BLOCK + i) % codeword_len
+        for coeff_idx in EMBED_COEFF_INDICES:
+            p = bit_idx % codeword_len
             dct_b.flat[coeff_idx] = _embed_coeff(
                 float(dct_b.flat[coeff_idx]), int(codeword[p]), alpha
             )
+            bit_idx += 1
             
         r0, c0 = br * BLOCK_SIZE, bc * BLOCK_SIZE
         Y_emb[r0:r0 + BLOCK_SIZE, c0:c0 + BLOCK_SIZE] = np.asarray(
@@ -84,7 +80,7 @@ def embed_watermark(
     unique_rates = sorted(set(float(r) for r in np.unique(rounded_map)), reverse=True)
 
     for tier_rate in unique_rates:
-        if tier_rate < 0.0:
+        if tier_rate <= 0.0:
             continue
             
         tier_mask = np.abs(rounded_map - tier_rate) < 0.005
@@ -96,7 +92,7 @@ def embed_watermark(
         codeword = ecc_engine.encode_block(
             watermark_bits.astype(np.uint8), tier_rate, scheme
         )
-        _embed_tier(Y_emb, dct_blocks, tier_coords, codeword, alpha, n_cols)
+        _embed_tier(Y_emb, dct_blocks, tier_coords, codeword, alpha)
 
     ycrcb_out = ycrcb.copy()
     ycrcb_out[:, :, 0] = np.clip(Y_emb, 0, 255).astype(np.uint8)

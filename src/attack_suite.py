@@ -85,6 +85,9 @@ try:
         safety_checker=None,
         requires_safety_checker=False
     ).to("cuda")
+    
+    _PIPE.enable_attention_slicing()
+
 except ImportError:
     _PIPE = None
 except Exception:

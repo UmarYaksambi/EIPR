@@ -1,4 +1,3 @@
-# src/baseline_comparison.py
 from __future__ import annotations
 
 import numpy as np
@@ -38,10 +37,11 @@ class FixedRateWatermarker:
         image_bgr: np.ndarray,
         watermark_bits: np.ndarray,
         scheme: str = "reed_solomon",
+        alpha: float = ALPHA,
     ) -> tuple[np.ndarray, np.ndarray]:
         rate_map = self._make_rate_map(image_bgr)
         watermarked = embed_watermark(
-            image_bgr, watermark_bits, rate_map, self._engine, scheme  
+            image_bgr, watermark_bits, rate_map, self._engine, scheme, alpha=alpha  
         )
         return watermarked, rate_map
 
@@ -51,42 +51,31 @@ class FixedRateWatermarker:
         rate_map: np.ndarray,
         n_bits: int,
         scheme: str = "reed_solomon",
-        original_bgr: np.ndarray | None = None,
+        alpha: float = ALPHA,
     ) -> np.ndarray:
         return extract_watermark(
-            image_bgr, n_bits, self._engine, rate_map=rate_map, scheme=scheme, 
+            image_bgr, n_bits, self._engine, rate_map=rate_map, scheme=scheme, alpha=alpha 
         )
 
 
 class SOTA_AdaptiveDCT_2023:
-    """
-    Simulates a recent (2023) SOTA adaptive DCT watermarking scheme that uses 
-    JND (Just Noticeable Difference) to embed ONLY in highly textured blocks,
-    leaving smooth blocks untouched, to preserve perceptual quality. 
-    """
     def __init__(self, alpha: float = 36.0):
         self.alpha = alpha
         self._engine = AdaptiveECCEngine()
+        self._last_rate_map = None
 
     def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray) -> np.ndarray:
         ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
         var_map = compute_block_dct_variance(ycrcb[:, :, 0])
         
-        # SOTA logic: Only embed in top 50% textured blocks (rate = 0.50 for them, 0.0 for smooth)
         tau = np.percentile(var_map, 50)
         rate_map = np.zeros_like(var_map, dtype=np.float32)
         rate_map[var_map >= tau] = 0.50
-        
+        self._last_rate_map = rate_map
         return embed_watermark(image_bgr, watermark_bits, rate_map, self._engine, alpha=self.alpha)
 
     def extract(self, image_bgr: np.ndarray, n_bits: int) -> np.ndarray:
-        ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
-        var_map = compute_block_dct_variance(ycrcb[:, :, 0])
-        tau = np.percentile(var_map, 50)
-        rate_map = np.zeros_like(var_map, dtype=np.float32)
-        rate_map[var_map >= tau] = 0.50
-        
-        return extract_watermark(image_bgr, n_bits, self._engine, rate_map=rate_map, alpha=self.alpha)
+        return extract_watermark(image_bgr, n_bits, self._engine, rate_map=self._last_rate_map, alpha=self.alpha)
 
 
 class LSBWatermarker:
@@ -213,10 +202,11 @@ def run_baseline_comparison(
     scheme: str = cfg.get("ecc", {}).get("scheme", "reed_solomon")
     tau_low  = float((cfg.get("ecc") or {}).get("tau_low")  or 50.0)
     tau_high = float((cfg.get("ecc") or {}).get("tau_high") or 200.0)
+    alpha = float(cfg.get("embedding", {}).get("alpha", ALPHA))
 
     lsb_bl  = LSBWatermarker()
     ss_bl   = SSWatermarker()
-    sota_bl = SOTA_AdaptiveDCT_2023()
+    sota_bl = SOTA_AdaptiveDCT_2023(alpha=alpha)
     fixed_bls = {
         "fixed_rate_0.25": FixedRateWatermarker(0.25),
         "fixed_rate_0.50": FixedRateWatermarker(0.50),
@@ -250,12 +240,12 @@ def run_baseline_comparison(
         )
 
         for img in img_iter:
-            # ---- Proposed adaptive-ECC (Fully Blind) --------------------
+            # ---- Proposed adaptive-ECC (Semi-Blind Platform Key) ----
             rate_map = _adaptive_rate_map(img)
-            wm = embed_watermark(img, watermark, rate_map, engine, scheme) 
+            wm = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha) 
             attacked = attack_fn(wm)                                         
             dec = extract_watermark(                                          
-                attacked, n_bits, engine, tau_low=tau_low, tau_high=tau_high, scheme=scheme,
+                attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha
             )
             adap_bers.append(bit_error_rate(watermark, dec))
             adap_psnrs.append(image_psnr(img, wm))
@@ -268,9 +258,9 @@ def run_baseline_comparison(
 
             # ---- Fixed-rate ECC baselines --------------------------------
             for key, fb in fixed_bls.items():
-                wm_f, rm_f = fb.embed(img, watermark, scheme)
+                wm_f, rm_f = fb.embed(img, watermark, scheme, alpha=alpha)
                 att_f = attack_fn(wm_f)                                      
-                dec_f = fb.extract(att_f, rm_f, n_bits, scheme)
+                dec_f = fb.extract(att_f, rm_f, n_bits, scheme, alpha=alpha)
                 fixed_bers[key].append(bit_error_rate(watermark, dec_f))
 
             # ---- LSB (no geometric correction) ---------------------------

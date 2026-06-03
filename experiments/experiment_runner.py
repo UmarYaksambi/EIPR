@@ -1,4 +1,3 @@
-# experiments/experiment_runner.py
 from __future__ import annotations
 
 import argparse
@@ -76,7 +75,7 @@ def run_smoke_test(_cfg: dict) -> None:
         rate_map = build_ecc_rate_map(var_map, tau_low, tau_high)
 
         watermarked = embed_watermark(img, watermark, rate_map, engine, alpha=alpha)
-        decoded = extract_watermark(watermarked, n_bits, engine, tau_low=tau_low, tau_high=tau_high, alpha=alpha)
+        decoded = extract_watermark(watermarked, n_bits, engine, rate_map=rate_map, alpha=alpha)
 
         ber  = bit_error_rate(watermark, decoded)
         psnr = image_psnr(img, watermarked)
@@ -161,10 +160,10 @@ def run_full_experiment(cfg: dict) -> None:
                 watermarked = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha)
                 attacked    = attack_fn(watermarked)                     
                 
-                # Fully blind extraction for the proposed method
+                # Semi-blind extraction using the Platform Key
                 decoded = extract_watermark(
                     attacked, n_bits, engine,
-                    tau_low=tau_low, tau_high=tau_high,
+                    rate_map=rate_map,
                     scheme=scheme, alpha=alpha
                 )
 
@@ -200,14 +199,13 @@ def run_full_experiment(cfg: dict) -> None:
     save_results(all_results, out_dir / "full_results.json")
     print_results_table(all_results, title="Full Experiment — Adaptive ECC")
 
-    # Table 1 now INCLUDES geometric attacks because Cr-sync is fully integrated and robust.
     latex = to_latex_table(
         all_results,
         caption=(
-            r"Proposed fully blind adaptive-ECC scheme under signal-processing and geometric attacks "
+            r"Proposed semi-blind adaptive-ECC scheme under signal-processing and geometric attacks "
             r"(500 AI-generated images, 512\,px, $n=64$ bits, $\alpha=36$, "
             r"PSNR\,=\,31.8\,dB, SSIM\,=\,0.875). "
-            r"Geometric attacks are handled blindly via Cr-channel Fourier-Mellin sync tones."
+            r"Geometric attacks are handled via Cr-channel Fourier-Mellin sync tones."
         ),
         label="tab:full",
         selected_metrics=["BER_mean", "NC_mean", "DetAcc_10pct"],
@@ -287,8 +285,8 @@ def run_ablation_rate(cfg: dict) -> None:
 
         for atk_name, atk_fn in ablation_attacks.items():
             attacked = atk_fn(watermarked)
-            # Fully blind extraction for proposed adaptive
-            decoded  = extract_watermark(attacked, n_bits, engine, tau_low=tau_low, tau_high=tau_high, scheme=scheme, alpha=alpha)
+            # Semi-blind extraction for proposed adaptive
+            decoded  = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
             adap_per_atk_bers[atk_name].append(bit_error_rate(watermark, decoded))
 
     results["adaptive_ecc"] = {"PSNR_mean": float(np.mean(adap_psnrs))}
@@ -304,7 +302,6 @@ def run_ablation_rate(cfg: dict) -> None:
     out_dir = pathlib.Path(cfg["results"]["output_dir"])
     save_results(results, out_dir / "ablation_rate.json")
     print_results_table(results, title="Ablation — Fixed vs Adaptive ECC Rate (blur_5 + regeneration_04)")
-
 
 def run_baseline_comparison(cfg: dict) -> None:
     from src.baseline_comparison import run_baseline_comparison as _run
@@ -355,7 +352,6 @@ def main() -> None:
         "baseline_comparison": run_baseline_comparison,
     }
     dispatch[args.mode](cfg)
-
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,3 @@
-# src/watermark_decoder.py
 from __future__ import annotations
 
 import numpy as np
@@ -15,29 +14,20 @@ from .watermark_embedder import (
     _decode_coeff,
 )
 from .geometric_sync import correct_attacked_image
-from .frequency_analyzer import compute_block_dct_variance, build_ecc_rate_map
-
 
 def extract_watermark(
     image_bgr: np.ndarray,
     n_bits: int,
     ecc_engine: AdaptiveECCEngine,
-    rate_map: np.ndarray | None = None,
-    tau_low: float | None = None,
-    tau_high: float | None = None,
+    rate_map: np.ndarray,
     scheme: ECCScheme = "reed_solomon",
     alpha: float = ALPHA,
 ) -> np.ndarray:
     
+    # 1. Blind Geometric Correction
     image_bgr = correct_attacked_image(image_bgr)
     ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
     Y = ycrcb[:, :, 0].astype(np.float64)
-
-    if rate_map is None:
-        if tau_low is None or tau_high is None:
-            raise ValueError("Must provide either rate_map or tau_low and tau_high for blind extraction.")
-        var_map = compute_block_dct_variance(Y)
-        rate_map = build_ecc_rate_map(var_map, tau_low, tau_high)
 
     h, w = Y.shape
     n_rows = h // BLOCK_SIZE
@@ -61,7 +51,7 @@ def extract_watermark(
     tier_results: list[tuple[np.ndarray, float]] = []
 
     for tier_rate in unique_rates:
-        if tier_rate < 0.0:
+        if tier_rate <= 0.0:
             continue
             
         tier_mask = np.abs(rounded_map - tier_rate) < 0.005
@@ -74,17 +64,20 @@ def extract_watermark(
         codeword_len = len(ecc_engine.encode_block(dummy, tier_rate, scheme))
 
         votes = np.zeros((codeword_len, 2), dtype=np.int32)
+        bit_idx = 0
 
         for (br, bc) in tier_coords:
+            # Bulletproof sync: advance bit_idx even if block is skipped!
+            if br >= n_rows or bc >= n_cols:
+                bit_idx += len(EMBED_COEFF_INDICES)
+                continue
+
             coeffs = dct_flat[br, bc]
-            
-            # Spatial phase locking mirror
-            abs_block_idx = br * n_cols + bc
-            
-            for i, coeff_idx in enumerate(EMBED_COEFF_INDICES):
-                p = (abs_block_idx * BITS_PER_BLOCK + i) % codeword_len
+            for coeff_idx in EMBED_COEFF_INDICES:
+                p = bit_idx % codeword_len
                 bit = _decode_coeff(float(coeffs[coeff_idx]), alpha)
                 votes[p, bit] += 1
+                bit_idx += 1
 
         raw_codeword = (votes[:, 1] >= votes[:, 0]).astype(np.uint8)
 

@@ -1,4 +1,3 @@
-# configs/experiment.yaml
 data:
   ai_generated_path: data/ai_generated/
   natural_path: data/natural/
@@ -10,27 +9,19 @@ watermark:
   seed: 42
 
 ecc:
-  scheme: repetition
+  scheme: reed_solomon
   tau_low: 1.5443               
   tau_high: 187.5232
   tau_percentile_low: 25
   tau_percentile_high: 75
-  r_high: 0.0
-  r_mid: 0.0
-  r_low: 0.0
+  r_high: 0.75
+  r_mid: 0.50
+  r_low: 0.25
 
 embedding:
   alpha: 36.0
   embed_coeff_indices: [1, 2, 3]
   block_size: 8
-
-# Geometric attacks — scope statement for Table 1
-# ------------------------------------------------
-# crop, rotation, scale are now successfully included in Table 1 as the Cr-channel
-# geometric sync effectively corrects these attacks blindly before QIM extraction.
-# Rationale: Block-DCT QIM requires the image grid to be aligned. We embed sync 
-# tones in the Cr chroma channel (avoiding QIM collision in Y) to perform 
-# Fourier-Mellin affine correction safely at decode time.
 
 attacks:
   jpeg_qualities: [30, 50, 70]
