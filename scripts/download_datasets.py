@@ -48,48 +48,94 @@ def download_natural_images():
                     print(f"  --> Giving up on image {i} after {max_retries} attempts.")
 
 def download_ai_images():
-    """Downloads 500 AI-generated images from HuggingFace using streaming."""
+    """Downloads AI-generated images and filters near-duplicates."""
     os.makedirs(AI_DIR, exist_ok=True)
-    
-    existing_ai = len([f for f in os.listdir(AI_DIR) if f.endswith('.jpg')])
+
+    existing_ai = len([f for f in os.listdir(AI_DIR) if f.endswith(".jpg")])
+
     if existing_ai >= IMAGE_COUNT:
         print(f"Already have {existing_ai} AI images. Skipping download.")
         return
 
-    print(f"\nDownloading {IMAGE_COUNT} AI-generated images from HuggingFace (Streaming Mode)...")
+    print(f"\nDownloading {IMAGE_COUNT} AI-generated images from HuggingFace (Similarity Filtering Enabled)...")
+
     try:
         import warnings
-        warnings.filterwarnings("ignore") # Suppress HuggingFace warnings
+        warnings.filterwarnings("ignore")
         from datasets import load_dataset
-        
+
         print("  Connecting to Midjourney stream...")
-        
-        # Load the stream, and critically, SKIP the ones we already downloaded!
-        dataset = load_dataset("ehristoforu/midjourney-images", split="train", streaming=True)
-        dataset = dataset.skip(existing_ai)
+
+        dataset = load_dataset(
+            "ehristoforu/midjourney-images",
+            split="train",
+            streaming=True
+        )
+
         iterator = iter(dataset)
-        
-        downloaded = existing_ai
-        
+
+        downloaded = 0
+        skipped_similar = 0
+
+        previous_embedding = None
+
         while downloaded < IMAGE_COUNT:
             try:
                 item = next(iterator)
             except StopIteration:
                 break
-                
-            filepath = os.path.join(AI_DIR, f"ai_gen_{downloaded:03d}.jpg")
-            
+
             try:
-                # Extract image and save
-                img = item["image"].convert("RGB").resize(IMAGE_SIZE, Image.Resampling.LANCZOS)
-                img.save(filepath)
-                
+                img = item["image"].convert("RGB")
+
+                similarity_img = img.resize(
+                    (128, 128),
+                    Image.Resampling.LANCZOS
+                )
+
+                current_embedding = np.asarray(
+                    similarity_img,
+                    dtype=np.float32
+                )
+
+                if previous_embedding is not None:
+                    mse = np.mean(
+                        (current_embedding - previous_embedding) ** 2
+                    )
+
+                    if mse < 100:
+                        skipped_similar += 1
+                        continue
+
+                previous_embedding = current_embedding
+
+                final_img = img.resize(
+                    IMAGE_SIZE,
+                    Image.Resampling.LANCZOS
+                )
+
+                filepath = os.path.join(
+                    AI_DIR,
+                    f"ai_gen_{downloaded:03d}.jpg"
+                )
+
+                final_img.save(filepath)
+
                 downloaded += 1
+
                 if downloaded % 50 == 0:
-                    print(f"  Processed {downloaded}/{IMAGE_COUNT} AI images")
+                    print(
+                        f"  Saved {downloaded}/{IMAGE_COUNT} images "
+                        f"(Skipped {skipped_similar} near-duplicates)"
+                    )
+
             except Exception:
-                pass # Skip corrupted stream chunks seamlessly
-                
+                pass
+
+        print(f"\nFinished.")
+        print(f"Saved images: {downloaded}")
+        print(f"Skipped near-duplicates: {skipped_similar}")
+
     except Exception as e:
         print(f"Error downloading AI images: {e}")
 
