@@ -1,44 +1,3 @@
-"""
-geometric_sync.py — Fourier sync-tone geometric correction for block-DCT watermarking.
-
-Problem
--------
-Block-DCT QIM stores codeword bits in spatially fixed 8×8 coefficient positions.
-Any geometric distortion (crop, rotation, scale) shifts the image grid relative
-to the read grid → BER ≈ 0.5.
-
-Approach: Direct sync-tone peak detection (Kutter 1999; Ruanaidh & Pun 1998)
----------------------------------------------------------------------------
-Four cosine tones at known spatial frequencies are added to the luminance
-channel before QIM watermarking.  At decode time:
-
-  1. Compute the shifted 2-D FFT magnitude of the attacked image.
-  2. For each known frequency, find the actual peak in a ±SEARCH_RADIUS window.
-  3. Least-squares solve for rotation θ and scale s from found vs. expected
-     positions: found_z = A · expected_z, where A = s_freq · exp(iθ).
-  4. Apply the inverse RST as a single centre-anchored warpAffine, which
-     preserves block-grid alignment.
-
-Why unified warpAffine (not sequential resize + rotate)
--------------------------------------------------------
-Sequential operations accumulate interpolation errors and — critically for
-crop-style attacks — a separate resize step does not keep the DCT block grid
-aligned with the image centre.  A single 2×3 affine matrix that encodes
-rotation + scale simultaneously maps every 8×8 block correctly in one pass.
-
-Why direct peak detection (not log-polar phase correlation)
-----------------------------------------------------------
-Log-polar phase correlation requires strong directional energy in the
-magnitude spectrum.  AI-generated images and Gaussian-blurred synthetics
-have flat, isotropic spectra → phase correlation returns (0,0).  The sync
-tones produce isolated peaks with 20-25× SNR that survive JPEG q=50 reliably.
-
-Non-blind assumption
---------------------
-``correct_attacked_image`` only needs the attacked image (the sync tones
-carry all registration information).  The ``original_bgr`` argument is
-accepted for API compatibility but is not used for estimation.
-"""
 from __future__ import annotations
 
 import warnings
@@ -46,70 +5,15 @@ import numpy as np
 import cv2
 from typing import NamedTuple
 
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-SYNC_ALPHA: float = 10.0   # sync-tone amplitude in luminance pixel units
-
-# Sync frequencies (integer cycles per image width/height).
-# Chosen at 1/16 of image size: survive JPEG q=30 (JPEG quantises down to
-# roughly q=10 equivalent at these frequencies before destroying them).
+SYNC_ALPHA: float = 10.0
 SYNC_FREQS: list[tuple[float, float]] = [
-    (32.0,   0.0),
-    ( 0.0,  32.0),
-    (32.0,  32.0),
-    (32.0, -32.0),
+    (32.0,   0.0), ( 0.0,  32.0),
+    (32.0,  32.0), (32.0, -32.0),
 ]
-
-# ---------------------------------------------------------------------------
-# IMPORTANT: SYNC_FREQS vs QIM embedding collision analysis
-# ---------------------------------------------------------------------------
-# For a 512×512 image with 8×8 block DCT:
-#   Block-DCT flat index 1 = (row=0, col=1):
-#     basis cos(π·1·(k+0.5)/8) has period 2·8/1 = 16 pixels
-#     → global frequency = 512/16 = 32 cycles/image
-#   Block-DCT flat index 2 = (row=0, col=2): 64 cycles/image
-#   Block-DCT flat index 3 = (row=0, col=3): 96 cycles/image
-#
-# EMBED_COEFF_INDICES = [1, 2, 3] in watermark_embedder.py.
-# SYNC_FREQS = 32 cycles/image → EXACT alignment with flat index 1.
-#
-# Measured projection of normalised sync template onto flat[1]:
-#   max |val| across all 4096 blocks ≈ 17.34 (= 0.48 × alpha=36)
-# This pushes 48% of smooth-block QIM decisions across the quantisation
-# boundary, producing BER ≈ 0.38 under any attack — empirically confirmed.
-#
-# CONSEQUENCE: embed_sync() MUST NOT be called before embed_watermark() in
-# the main pipeline. The two are incompatible at these frequencies.
-#
-# CORRECT INTEGRATION PATH:
-#   Option A (preferred): embed sync tones in the Cr or Cb chroma channel
-#     via embed_sync_chroma() below.  QIM operates on Y only → zero collision.
-#     Verify JPEG chroma quant step < SYNC_ALPHA before deploying.
-#   Option B: change SYNC_FREQS to ≥128 cycles/image.  These survive JPEG
-#     less reliably but may be acceptable for non-JPEG channels.
-#
-# The current SYNC_FREQS and Y-channel embed_sync() are preserved for
-# reference and future work; they are NOT used in the main pipeline.
-# ---------------------------------------------------------------------------
-
-# Search window half-width (bins).  Must be < min(SYNC_FREQ) = 32 to avoid
-# DC leakage, and large enough to cover worst-case crop 10% scale shift:
-#   Δf = 32 · (1/0.9 − 1) ≈ 3.6 bins.  SEARCH_RADIUS = 15 covers this
-#   with a 4× safety margin while staying clear of DC (32 − 15 = 17 bins away).
 SEARCH_RADIUS: int = 15
-
-MIN_PEAK_SNR: float = 3.0   # minimum peak/mean SNR to trust a found peak
-
-
-# ---------------------------------------------------------------------------
-# Sync template embedding
-# ---------------------------------------------------------------------------
+MIN_PEAK_SNR: float = 5.0
 
 def _build_template(h: int, w: int) -> np.ndarray:
-    """Sum of cosines at SYNC_FREQS, normalised to peak amplitude ±SYNC_ALPHA."""
     xs  = np.arange(w, dtype=np.float64)[None, :]
     ys  = np.arange(h, dtype=np.float64)[:, None]
     tpl = np.zeros((h, w), dtype=np.float64)
@@ -118,54 +22,7 @@ def _build_template(h: int, w: int) -> np.ndarray:
     peak = float(np.max(np.abs(tpl))) + 1e-12
     return tpl * (SYNC_ALPHA / peak)
 
-
-def embed_sync(image_bgr: np.ndarray) -> np.ndarray:
-    """
-    Add the synchronisation template to the luminance channel.
-
-    *** WARNING: DO NOT USE IN THE MAIN PIPELINE ***
-    SYNC_FREQS at 32 cycles/image collides with QIM flat index 1 (also 32
-    cycles/image for 512×512 images with 8×8 blocks).  Calling this before
-    embed_watermark() corrupts the QIM signal and produces BER ≈ 0.38.
-    See the SYNC_FREQS collision analysis comment above.
-
-    Use embed_sync_chroma() instead, or keep this for non-QIM applications.
-
-    Args:
-        image_bgr: H×W×3 uint8 BGR image.
-
-    Returns:
-        BGR image with sync tones added to Y channel; same shape and dtype.
-    """
-    ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
-    Y     = ycrcb[:, :, 0].astype(np.float64)
-    h, w  = Y.shape
-    out   = ycrcb.copy()
-    out[:, :, 0] = np.clip(Y + _build_template(h, w), 0.0, 255.0).astype(np.uint8)
-    return cv2.cvtColor(out, cv2.COLOR_YCrCb2BGR)
-
-
 def embed_sync_chroma(image_bgr: np.ndarray, channel: int = 1) -> np.ndarray:
-    """
-    Add the synchronisation template to a CHROMA channel (Cr or Cb).
-
-    Safe to use before embed_watermark() because QIM operates on the Y
-    (luminance) channel only — there is zero coefficient collision.
-
-    The chroma sync tones survive mild geometric distortion (crop ≤ 10%,
-    rotation ≤ 5°) and can be detected at the decoder without the original
-    image.  JPEG chroma quantisation steps are larger than luma steps
-    (standard JFIF chroma table: quant step ≈ 17–99 at q=50 for the
-    frequency range used here), so verify that SYNC_ALPHA > chroma quant
-    step before deploying under JPEG compression.
-
-    Args:
-        image_bgr: H×W×3 uint8 BGR image.
-        channel:   1 = Cr, 2 = Cb in YCrCb order (default: Cr = channel 1).
-
-    Returns:
-        BGR image with sync tones added to the chosen chroma channel.
-    """
     if channel not in (1, 2):
         raise ValueError(f"channel must be 1 (Cr) or 2 (Cb), got {channel}")
     ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
@@ -175,61 +32,23 @@ def embed_sync_chroma(image_bgr: np.ndarray, channel: int = 1) -> np.ndarray:
     out[:, :, channel] = np.clip(C + _build_template(h, w), 0.0, 255.0).astype(np.uint8)
     return cv2.cvtColor(out, cv2.COLOR_YCrCb2BGR)
 
-
-# ---------------------------------------------------------------------------
-# GeomTransform result type
-# ---------------------------------------------------------------------------
-
 class GeomTransform(NamedTuple):
-    """Estimated geometric transform applied to the attacked image."""
-    angle_deg: float   # counter-clockwise rotation (degrees)
-    scale: float       # frequency scale |A|; spatial zoom-in = 1/scale
-    tx: float          # unused (kept for API compatibility)
-    ty: float          # unused (kept for API compatibility)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _lum_f32(img: np.ndarray) -> np.ndarray:
-    """BGR → luminance float32."""
-    return cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)[:, :, 0].astype(np.float32)
-
+    angle_deg: float
+    scale: float
+    tx: float
+    ty: float
 
 def _magnitude_spectrum(Y: np.ndarray) -> np.ndarray:
-    """
-    Shifted 2-D FFT magnitude with Hanning window.
-    DC is at the centre.  Returns float64, same shape as Y.
-    """
     h, w = Y.shape
     win  = np.outer(np.hanning(h), np.hanning(w))
     F    = np.fft.fftshift(np.fft.fft2(Y.astype(np.float64) * win))
     return np.abs(F)
 
-
-def _find_peak(
-    mag: np.ndarray,
-    expected_fu: float,
-    expected_fv: float,
-    search_radius: int,
-) -> tuple[float, float, float]:
-    """
-    Find the strongest peak near the expected sync-tone position.
-
-    In a shifted FFT of an H×W image, a tone at (fu, fv) cycles/image
-    appears at pixel (cy − fv, cx + fu) where cy=H//2, cx=W//2.
-
-    Returns:
-        (found_fu, found_fv, snr) — found frequency coordinates and
-        peak-to-mean SNR.  Falls back to expected position if SNR is low.
-    """
+def _find_peak(mag: np.ndarray, expected_fu: float, expected_fv: float, search_radius: int) -> tuple[float, float, float]:
     h, w  = mag.shape
     cy, cx = h // 2, w // 2
-
     row_c = int(round(cy - expected_fv))
     col_c = int(round(cx + expected_fu))
-
     r     = int(search_radius)
     row_s = max(0, row_c - r)
     row_e = min(h, row_c + r + 1)
@@ -244,47 +63,30 @@ def _find_peak(
     mean_val = float(patch.mean()) + 1e-12
     snr      = peak_val / mean_val
 
-    idx       = np.unravel_index(np.argmax(patch), patch.shape)
-    found_row = row_s + idx[0]
-    found_col = col_s + idx[1]
+    idx = np.unravel_index(np.argmax(patch), patch.shape)
+    
+    # Sub-pixel peak estimation using Center of Mass
+    r_idx, c_idx = idx[0], idx[1]
+    r_s_sub = max(0, r_idx - 1); r_e_sub = min(patch.shape[0], r_idx + 2)
+    c_s_sub = max(0, c_idx - 1); c_e_sub = min(patch.shape[1], c_idx + 2)
+    neighborhood = patch[r_s_sub:r_e_sub, c_s_sub:c_e_sub]
+    mass = neighborhood.sum() + 1e-12
+    rr, cc = np.indices(neighborhood.shape)
+    r_offset = (rr * neighborhood).sum() / mass - (r_idx - r_s_sub)
+    c_offset = (cc * neighborhood).sum() / mass - (c_idx - c_s_sub)
 
+    found_row = row_s + r_idx + r_offset
+    found_col = col_s + c_idx + c_offset
     return float(found_col - cx), float(cy - found_row), snr
 
+def estimate_transform(attacked_bgr: np.ndarray) -> GeomTransform:
+    ycrcb = cv2.cvtColor(attacked_bgr, cv2.COLOR_BGR2YCrCb)
+    C_att = ycrcb[:, :, 1].astype(np.float32)
+    mag   = _magnitude_spectrum(C_att)
 
-# ---------------------------------------------------------------------------
-# Transform estimation
-# ---------------------------------------------------------------------------
-
-def estimate_transform(
-    original_bgr: np.ndarray,   # kept for API compatibility; not used
-    attacked_bgr: np.ndarray,
-) -> GeomTransform:
-    """
-    Estimate rotation and scale from sync-tone peak shifts.
-
-    The FFT magnitude of a rotated+scaled image has peaks that are rotated
-    and scaled relative to the original.  Crop+resize is a centre-anchored
-    zoom, which in the frequency domain is a reciprocal scale (zoom-in by s
-    → freq peaks move to 1/s of their original distance from DC).
-
-    Args:
-        original_bgr: Accepted for API compatibility; not used in estimation.
-        attacked_bgr: H×W×3 geometrically distorted image.
-
-    Returns:
-        GeomTransform(angle_deg, scale, tx=0, ty=0).
-        ``scale`` is the frequency-domain scale factor |A|.  Spatial zoom-in
-        = 1/scale.  ``correct_transform`` uses this to build the right
-        inverse warpAffine.
-    """
-    Y_att = _lum_f32(attacked_bgr)
-    mag   = _magnitude_spectrum(Y_att)
-
-    found_pts:  list[tuple[float, float]] = []
-    expect_pts: list[tuple[float, float]] = []
-
+    found_pts, expect_pts = [], []
     for fu, fv in SYNC_FREQS:
-        for sign in (1.0, -1.0):          # both Hermitian conjugate peaks
+        for sign in (1.0, -1.0):
             efu, efv = fu * sign, fv * sign
             ffu, ffv, snr = _find_peak(mag, efu, efv, SEARCH_RADIUS)
             if snr >= MIN_PEAK_SNR and (abs(ffu) > 1 or abs(ffv) > 1):
@@ -294,7 +96,6 @@ def estimate_transform(
     if len(found_pts) < 2:
         return GeomTransform(angle_deg=0.0, scale=1.0, tx=0.0, ty=0.0)
 
-    # Least-squares: found_z = A · expected_z, A = freq_scale · exp(iθ)
     expected_c = np.array([complex(eu, ev) for eu, ev in expect_pts])
     found_c    = np.array([complex(fu, fv) for fu, fv in found_pts])
     denom      = float(np.sum(np.abs(expected_c) ** 2))
@@ -302,100 +103,35 @@ def estimate_transform(
         return GeomTransform(angle_deg=0.0, scale=1.0, tx=0.0, ty=0.0)
 
     A          = np.sum(found_c * np.conj(expected_c)) / denom
-    freq_scale = float(np.clip(abs(A),               0.4,  2.5))
+    freq_scale = float(np.clip(abs(A), 0.4, 2.5))
     angle_deg  = float(np.clip(np.degrees(np.angle(A)), -45.0, 45.0))
-
     return GeomTransform(angle_deg=angle_deg, scale=freq_scale, tx=0.0, ty=0.0)
 
-
-# ---------------------------------------------------------------------------
-# Geometric correction — single unified centre-anchored warpAffine
-# ---------------------------------------------------------------------------
-
-def correct_transform(
-    image_bgr: np.ndarray,
-    transform: GeomTransform,
-) -> np.ndarray:
-    """
-    Undo the estimated geometric transform with a single warpAffine.
-
-    The inverse of a centre-anchored zoom-by-s_spatial and rotation-by-θ is:
-        corrected[p] = attacked[ M · p ]
-    where M = (1/s_spatial) · R_{-θ} is applied around the image centre,
-    and s_spatial = 1/freq_scale = 1/transform.scale.
-
-    Using a single affine matrix (rather than sequential resize + rotate)
-    ensures every 8×8 DCT block position is reconstructed in one bilinear
-    pass, avoiding accumulated interpolation errors.
-
-    Args:
-        image_bgr: H×W×3 uint8 BGR attacked image.
-        transform: GeomTransform from ``estimate_transform``.
-
-    Returns:
-        Geometrically corrected image, same spatial size.
-    """
-    h, w      = image_bgr.shape[:2]
+def correct_transform(image_bgr: np.ndarray, transform: GeomTransform) -> np.ndarray:
+    h, w = image_bgr.shape[:2]
     freq_scale = float(transform.scale)
     angle_deg  = float(transform.angle_deg)
 
-    if abs(freq_scale - 1.0) < 0.005 and abs(angle_deg) < 0.1:
+    # Increased thresholds to prevent false positives on pure valumetric attacks
+    if abs(freq_scale - 1.0) < 0.04 and abs(angle_deg) < 1.5:
         return image_bgr.copy()
 
-    # Undo the zoom-in: attacked[p] = original[s_zoom·(p-c)+c] with s_zoom=1/freq_scale.
-    # To recover: corrected[p] = attacked[freq_scale·(p-c)+c].
-    # Therefore the affine source-sampling scale is freq_scale (NOT 1/freq_scale).
     s_spatial = float(freq_scale)
-
-    # Rotation: attacked[p] = original[R_{-θ}(p-c)+c]
-    # Recovery: corrected[p] = attacked[R_{+θ}(p-c)+c]
-    # So theta_rad = +angle_deg (not negated).
     theta_rad = np.radians(angle_deg)
-    cos_t     = np.cos(theta_rad)
-    sin_t     = np.sin(theta_rad)
-    cx, cy    = w / 2.0, h / 2.0
+    cos_t, sin_t = np.cos(theta_rad), np.sin(theta_rad)
+    cx, cy = w / 2.0, h / 2.0
 
-    # Affine coefficients: src = (s_spatial · R_{-θ}) · (dst - c) + c
-    #   [ a00  a01  t0 ]       with t anchored at image centre
-    #   [ a10  a11  t1 ]
     a00 = s_spatial * cos_t;  a01 = s_spatial * (-sin_t)
-    a10 = s_spatial * sin_t;  a11 = s_spatial *   cos_t
+    a10 = s_spatial * sin_t;  a11 = s_spatial * cos_t
     t0  = cx - a00 * cx - a01 * cy
     t1  = cy - a10 * cx - a11 * cy
 
-    M = np.float32([[a00, a01, t0],
-                    [a10, a11, t1]])
+    M = np.float32([[a00, a01, t0], [a10, a11, t1]])
+    return cv2.warpAffine(image_bgr, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
-    return cv2.warpAffine(
-        image_bgr, M, (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
-
-
-def correct_attacked_image(
-    original_bgr: np.ndarray,
-    attacked_bgr: np.ndarray,
-) -> np.ndarray:
-    """
-    Estimate and correct geometric distortion in one call.
-
-    Falls back to the attacked image unchanged on any exception.
-
-    Args:
-        original_bgr: Sync-embedded watermarked original (API compat; unused).
-        attacked_bgr: H×W×3 geometrically distorted image.
-
-    Returns:
-        Geometrically corrected BGR image.
-    """
+def correct_attacked_image(attacked_bgr: np.ndarray) -> np.ndarray:
     try:
-        t = estimate_transform(original_bgr, attacked_bgr)
+        t = estimate_transform(attacked_bgr)
         return correct_transform(attacked_bgr, t)
     except Exception as exc:
-        warnings.warn(
-            f"[geometric_sync] correction failed ({exc!r}); "
-            "returning attacked image uncorrected.",
-            stacklevel=2,
-        )
         return attacked_bgr
