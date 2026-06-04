@@ -24,14 +24,15 @@ def _decode_coeff(val: float, alpha: float) -> int:
 
 def get_tier_alpha(tier_rate: float, base_alpha: float) -> float:
     """
-    Rate-Coupled JND Mask: scale the QIM step size based on texture tier.
+    Rate-Coupled JND Mask: stretch the QIM step size based on texture tier.
+    With base_alpha=16.0: Smooth=8.0, Mid=20.0, Textured=40.0
     """
     if tier_rate >= 0.70:
-        return base_alpha * 0.35  # Smooth (fragile to eye) -> 35% strength
+        return base_alpha * 0.50  # Smooth (fragile to eye) -> 50% strength
     elif tier_rate >= 0.40:
-        return base_alpha * 0.70  # Mid -> 70% strength
+        return base_alpha * 1.25  # Mid -> 125% strength
     else:
-        return base_alpha * 1.10  # Textured (hides noise) -> 110% strength
+        return base_alpha * 2.50  # Textured (hides noise) -> 250% strength
 
 def _image_to_dct_blocks(Y: np.ndarray) -> tuple[np.ndarray, int, int]:
     h, w = Y.shape
