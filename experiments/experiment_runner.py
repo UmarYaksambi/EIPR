@@ -75,7 +75,7 @@ def run_smoke_test(_cfg: dict) -> None:
         rate_map = build_ecc_rate_map(var_map, tau_low, tau_high)
 
         watermarked = embed_watermark(img, watermark, rate_map, engine, scheme="reed_solomon", alpha=alpha)
-        decoded = extract_watermark(watermarked, n_bits, engine, rate_map=rate_map, scheme="reed_solomon", alpha=alpha)
+        decoded = extract_watermark(watermarked, rate_map, engine, n_bits, scheme="reed_solomon", alpha=alpha, original_bgr=watermarked)
 
         ber  = bit_error_rate(watermark, decoded)
         psnr = image_psnr(img, watermarked)
@@ -137,9 +137,6 @@ def run_full_experiment(cfg: dict) -> None:
     watermark = rng.integers(0, 2, n_bits).astype(np.uint8)
     set_attack_seed(cfg["watermark"]["seed"])
 
-    tau_low  = float(cfg["ecc"].get("tau_low")  or 50.0)
-    tau_high = float(cfg["ecc"].get("tau_high") or 200.0)
-
     all_results: dict[str, dict] = {}
     out_dir = pathlib.Path(cfg["results"]["output_dir"])
 
@@ -160,8 +157,10 @@ def run_full_experiment(cfg: dict) -> None:
                 watermarked = embed_watermark(img, watermark, rate_map, engine, scheme=scheme, alpha=alpha)
                 attacked    = attack_fn(watermarked)                     
                 
-                # Semi-blind extraction using the Platform Key
-                decoded = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
+                # Semi-blind extraction triggering Geometric Correction via original_bgr
+                decoded = extract_watermark(
+                    attacked, rate_map, engine, n_bits, scheme=scheme, alpha=alpha, original_bgr=watermarked
+                )
 
                 bers.append(bit_error_rate(watermark, decoded))
                 ncs.append(normalized_correlation(watermark, decoded))
@@ -199,9 +198,8 @@ def run_full_experiment(cfg: dict) -> None:
         all_results,
         caption=(
             r"Proposed semi-blind adaptive-ECC scheme under signal-processing and geometric attacks "
-            r"(500 AI-generated images, 512\,px, $n=64$ bits, $\alpha=36$, "
-            r"PSNR\,=\,31.8\,dB, SSIM\,=\,0.875). "
-            r"Geometric attacks are handled via Cr-channel Fourier-Mellin sync tones."
+            r"(500 AI-generated images, 512\,px, $n=64$ bits, $\alpha=16$ with rate-coupled JND, "
+            r"PSNR\,>\,35\,dB). Geometric attacks are handled via Cr-channel Fourier-Mellin sync tones."
         ),
         label="tab:full",
         selected_metrics=["BER_mean", "NC_mean", "DetAcc_10pct"],
@@ -248,7 +246,9 @@ def run_ablation_rate(cfg: dict) -> None:
 
             for atk_name, atk_fn in ablation_attacks.items():
                 attacked = atk_fn(watermarked)
-                decoded  = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
+                decoded  = extract_watermark(
+                    attacked, rate_map, engine, n_bits, scheme=scheme, alpha=alpha, original_bgr=watermarked
+                )
                 per_atk_bers[atk_name].append(bit_error_rate(watermark, decoded))
 
         label = f"fixed_rate_{fixed_rate:.2f}"
@@ -264,25 +264,17 @@ def run_ablation_rate(cfg: dict) -> None:
 
     adap_per_atk_bers: dict[str, list[float]] = {k: [] for k in ablation_attacks}
     adap_psnrs: list[float] = []
-    tau_low  = float(cfg["ecc"].get("tau_low")  or 50.0)
-    tau_high = float(cfg["ecc"].get("tau_high") or 200.0)
 
     for img in images:
-        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-        var_map  = compute_block_dct_variance(ycrcb[:, :, 0])
-        rate_map = build_ecc_rate_map(
-            var_map, tau_low, tau_high,
-            r_high=cfg["ecc"]["r_high"],
-            r_mid =cfg["ecc"]["r_mid"],
-            r_low =cfg["ecc"]["r_low"],
-        )
+        rate_map = _make_rate_map(img, cfg)
         watermarked = embed_watermark(img, watermark, rate_map, engine, scheme=scheme, alpha=alpha)
         adap_psnrs.append(image_psnr(img, watermarked))
 
         for atk_name, atk_fn in ablation_attacks.items():
             attacked = atk_fn(watermarked)
-            # Semi-blind extraction for proposed adaptive
-            decoded  = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
+            decoded  = extract_watermark(
+                attacked, rate_map, engine, n_bits, scheme=scheme, alpha=alpha, original_bgr=watermarked
+            )
             adap_per_atk_bers[atk_name].append(bit_error_rate(watermark, decoded))
 
     results["adaptive_ecc"] = {"PSNR_mean": float(np.mean(adap_psnrs))}

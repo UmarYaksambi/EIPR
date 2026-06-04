@@ -25,8 +25,8 @@ class FixedRateWatermarker:
         rate_map = self._make_rate_map(image_bgr)
         return embed_watermark(image_bgr, watermark_bits, rate_map, self._engine, scheme, alpha=alpha), rate_map
 
-    def extract(self, image_bgr: np.ndarray, rate_map: np.ndarray, n_bits: int, scheme: str = "reed_solomon", alpha: float = ALPHA) -> np.ndarray:
-        return extract_watermark(image_bgr, n_bits, self._engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
+    def extract(self, image_bgr: np.ndarray, rate_map: np.ndarray, n_bits: int, scheme: str = "reed_solomon", alpha: float = ALPHA, original_bgr: np.ndarray | None = None) -> np.ndarray:
+        return extract_watermark(image_bgr, rate_map, self._engine, n_bits, scheme=scheme, alpha=alpha, original_bgr=original_bgr)
 
 class SOTA_AdaptiveDCT_2023:
     def __init__(self, alpha: float = 36.0):
@@ -43,8 +43,8 @@ class SOTA_AdaptiveDCT_2023:
         self._last_rate_map = rate_map
         return embed_watermark(image_bgr, watermark_bits, rate_map, self._engine, alpha=self.alpha)
 
-    def extract(self, image_bgr: np.ndarray, n_bits: int) -> np.ndarray:
-        return extract_watermark(image_bgr, n_bits, self._engine, rate_map=self._last_rate_map, alpha=self.alpha)
+    def extract(self, image_bgr: np.ndarray, n_bits: int, original_bgr: np.ndarray | None = None) -> np.ndarray:
+        return extract_watermark(image_bgr, self._last_rate_map, self._engine, n_bits, alpha=self.alpha, original_bgr=original_bgr)
 
 class LSBWatermarker:
     def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray) -> np.ndarray:
@@ -157,7 +157,12 @@ def run_baseline_comparison(cfg: dict, images: list[np.ndarray], n_bits: int = 6
     def _adaptive_rate_map(img: np.ndarray) -> np.ndarray:
         ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
         var_map = compute_block_dct_variance(ycrcb[:, :, 0])
-        return build_ecc_rate_map(var_map, tau_low, tau_high)
+        return build_ecc_rate_map(
+            var_map, tau_low, tau_high,
+            r_high=float(cfg.get("ecc", {}).get("r_high", 0.75)),
+            r_mid=float(cfg.get("ecc", {}).get("r_mid", 0.50)),
+            r_low=float(cfg.get("ecc", {}).get("r_low", 0.25)),
+        )
 
     attack_iter = tqdm(attacks.items(), desc="Attacks") if _tqdm_available else attacks.items()
 
@@ -170,23 +175,29 @@ def run_baseline_comparison(cfg: dict, images: list[np.ndarray], n_bits: int = 6
             rate_map = _adaptive_rate_map(img)
             wm = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha) 
             attacked = attack_fn(wm)                                         
-            dec = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
+            
+            # 1. Proposed Method (Triggering Geometric sync via original_bgr)
+            dec = extract_watermark(attacked, rate_map, engine, n_bits, scheme=scheme, alpha=alpha, original_bgr=wm)
             adap_bers.append(bit_error_rate(watermark, dec))
             adap_psnrs.append(image_psnr(img, wm))
             
+            # 2. SOTA
             wm_sota = sota_bl.embed(img, watermark)
-            dec_sota = sota_bl.extract(attack_fn(wm_sota), n_bits)
+            dec_sota = sota_bl.extract(attack_fn(wm_sota), n_bits, original_bgr=wm_sota)
             sota_bers.append(bit_error_rate(watermark, dec_sota))
 
+            # 3. Fixed Rate
             for key, fb in fixed_bls.items():
                 wm_f, rm_f = fb.embed(img, watermark, scheme, alpha=alpha)
-                dec_f = fb.extract(attack_fn(wm_f), rm_f, n_bits, scheme, alpha=alpha)
+                dec_f = fb.extract(attack_fn(wm_f), rm_f, n_bits, scheme, alpha=alpha, original_bgr=wm_f)
                 fixed_bers[key].append(bit_error_rate(watermark, dec_f))
 
+            # 4. LSB
             wm_lsb = lsb_bl.embed(img, watermark)
             dec_lsb = lsb_bl.extract(attack_fn(wm_lsb), n_bits)
             lsb_bers.append(bit_error_rate(watermark, dec_lsb))
 
+            # 5. Spread Spectrum
             wm_ss = ss_bl.embed(img, watermark)
             att_ss = attack_fn(wm_ss)                                        
             dec_ss = ss_bl.extract(att_ss, img, n_bits)
