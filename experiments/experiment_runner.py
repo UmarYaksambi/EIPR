@@ -74,8 +74,8 @@ def run_smoke_test(_cfg: dict) -> None:
         tau_low, tau_high = calibrate_thresholds(var_map.flatten(), 25, 75)
         rate_map = build_ecc_rate_map(var_map, tau_low, tau_high)
 
-        watermarked = embed_watermark(img, watermark, rate_map, engine, alpha=alpha)
-        decoded = extract_watermark(watermarked, n_bits, engine, rate_map=rate_map, alpha=alpha)
+        watermarked = embed_watermark(img, watermark, rate_map, engine, scheme="reed_solomon", alpha=alpha)
+        decoded = extract_watermark(watermarked, n_bits, engine, rate_map=rate_map, scheme="reed_solomon", alpha=alpha)
 
         ber  = bit_error_rate(watermark, decoded)
         psnr = image_psnr(img, watermarked)
@@ -157,15 +157,11 @@ def run_full_experiment(cfg: dict) -> None:
             )
             for img in img_iter:
                 rate_map   = _make_rate_map(img, cfg)
-                watermarked = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha)
+                watermarked = embed_watermark(img, watermark, rate_map, engine, scheme=scheme, alpha=alpha)
                 attacked    = attack_fn(watermarked)                     
                 
                 # Semi-blind extraction using the Platform Key
-                decoded = extract_watermark(
-                    attacked, n_bits, engine,
-                    rate_map=rate_map,
-                    scheme=scheme, alpha=alpha
-                )
+                decoded = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
 
                 bers.append(bit_error_rate(watermark, decoded))
                 ncs.append(normalized_correlation(watermark, decoded))
@@ -247,7 +243,7 @@ def run_ablation_rate(cfg: dict) -> None:
             ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
             var_map  = compute_block_dct_variance(ycrcb[:, :, 0])
             rate_map = np.full(var_map.shape, fixed_rate, dtype=np.float32)
-            watermarked = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha)
+            watermarked = embed_watermark(img, watermark, rate_map, engine, scheme=scheme, alpha=alpha)
             psnrs.append(image_psnr(img, watermarked))
 
             for atk_name, atk_fn in ablation_attacks.items():
@@ -280,7 +276,7 @@ def run_ablation_rate(cfg: dict) -> None:
             r_mid =cfg["ecc"]["r_mid"],
             r_low =cfg["ecc"]["r_low"],
         )
-        watermarked = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha)
+        watermarked = embed_watermark(img, watermark, rate_map, engine, scheme=scheme, alpha=alpha)
         adap_psnrs.append(image_psnr(img, watermarked))
 
         for atk_name, atk_fn in ablation_attacks.items():

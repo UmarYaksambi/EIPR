@@ -5,22 +5,11 @@ import cv2
 from scipy.fft import dctn, idctn
 
 from .ecc_engine import AdaptiveECCEngine
-from .frequency_analyzer import (
-    compute_block_dct_variance,
-    build_ecc_rate_map,
-    calibrate_thresholds,
-)
-from .watermark_embedder import (
-    embed_watermark,
-    ALPHA,
-    BLOCK_SIZE,
-    BITS_PER_BLOCK,
-    EMBED_COEFF_INDICES,
-)
+from .frequency_analyzer import compute_block_dct_variance, build_ecc_rate_map, calibrate_thresholds
+from .watermark_embedder import embed_watermark, ALPHA, BLOCK_SIZE, BITS_PER_BLOCK, EMBED_COEFF_INDICES
 from .watermark_decoder import extract_watermark
 from .metrics import bit_error_rate, normalized_correlation, image_psnr, image_ssim
 from .attack_suite import ATTACK_SUITE, BASELINE_ATTACKS
-
 
 class FixedRateWatermarker:
     def __init__(self, fixed_rate: float = 0.50) -> None:
@@ -32,31 +21,12 @@ class FixedRateWatermarker:
         var_map = compute_block_dct_variance(ycrcb[:, :, 0])
         return np.full(var_map.shape, self.fixed_rate, dtype=np.float32)
 
-    def embed(
-        self,
-        image_bgr: np.ndarray,
-        watermark_bits: np.ndarray,
-        scheme: str = "reed_solomon",
-        alpha: float = ALPHA,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray, scheme: str = "reed_solomon", alpha: float = ALPHA) -> tuple[np.ndarray, np.ndarray]:
         rate_map = self._make_rate_map(image_bgr)
-        watermarked = embed_watermark(
-            image_bgr, watermark_bits, rate_map, self._engine, scheme, alpha=alpha  
-        )
-        return watermarked, rate_map
+        return embed_watermark(image_bgr, watermark_bits, rate_map, self._engine, scheme, alpha=alpha), rate_map
 
-    def extract(
-        self,
-        image_bgr: np.ndarray,
-        rate_map: np.ndarray,
-        n_bits: int,
-        scheme: str = "reed_solomon",
-        alpha: float = ALPHA,
-    ) -> np.ndarray:
-        return extract_watermark(
-            image_bgr, n_bits, self._engine, rate_map=rate_map, scheme=scheme, alpha=alpha 
-        )
-
+    def extract(self, image_bgr: np.ndarray, rate_map: np.ndarray, n_bits: int, scheme: str = "reed_solomon", alpha: float = ALPHA) -> np.ndarray:
+        return extract_watermark(image_bgr, n_bits, self._engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
 
 class SOTA_AdaptiveDCT_2023:
     def __init__(self, alpha: float = 36.0):
@@ -67,7 +37,6 @@ class SOTA_AdaptiveDCT_2023:
     def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray) -> np.ndarray:
         ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
         var_map = compute_block_dct_variance(ycrcb[:, :, 0])
-        
         tau = np.percentile(var_map, 50)
         rate_map = np.zeros_like(var_map, dtype=np.float32)
         rate_map[var_map >= tau] = 0.50
@@ -77,20 +46,12 @@ class SOTA_AdaptiveDCT_2023:
     def extract(self, image_bgr: np.ndarray, n_bits: int) -> np.ndarray:
         return extract_watermark(image_bgr, n_bits, self._engine, rate_map=self._last_rate_map, alpha=self.alpha)
 
-
 class LSBWatermarker:
-    def embed(
-        self,
-        image_bgr: np.ndarray,
-        watermark_bits: np.ndarray,
-    ) -> np.ndarray:
+    def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray) -> np.ndarray:
         ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb).copy()
         Y = ycrcb[:, :, 0].flatten().copy()
         n = len(watermark_bits)
-        if n > len(Y):
-            raise ValueError(
-                f"LSB capacity = {len(Y)} bits but watermark has {n} bits."
-            )
+        if n > len(Y): raise ValueError(f"LSB capacity = {len(Y)} bits but watermark has {n} bits.")
         Y[:n] = (Y[:n] & 0xFE) | watermark_bits[:n].astype(np.uint8)
         ycrcb[:, :, 0] = Y.reshape(ycrcb.shape[:2])
         return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
@@ -100,21 +61,17 @@ class LSBWatermarker:
         flat = ycrcb[:, :, 0].flatten()
         return (flat[:n_bits] & 0x01).astype(np.uint8)
 
-
 class SSWatermarker:
     def __init__(self, alpha: float = 8.0, seed: int = 99) -> None:
-        self.alpha = float(alpha)
-        self.seed = int(seed)
+        self.alpha, self.seed = float(alpha), int(seed)
 
     def _carrier(self, n_bits: int, n_coeffs: int) -> np.ndarray:
         rng = np.random.default_rng(self.seed)
         return rng.choice([-1.0, 1.0], size=(n_bits, n_coeffs))
 
     def _mid_freq_indices(self, flat_size: int, n_coeffs: int) -> np.ndarray:
-        mid_start = flat_size // 8
-        mid_end   = mid_start + n_coeffs * 4
-        mid_end   = min(mid_end, flat_size)
-        return np.arange(mid_start, mid_end)
+        mid_start, mid_end = flat_size // 8, flat_size // 8 + n_coeffs * 4
+        return np.arange(mid_start, min(mid_end, flat_size))
 
     def embed(self, image_bgr: np.ndarray, watermark_bits: np.ndarray) -> np.ndarray:
         ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
@@ -122,8 +79,7 @@ class SSWatermarker:
         dct_full: np.ndarray = np.asarray(dctn(Y, norm="ortho"))
         flat = dct_full.flatten().copy()
 
-        n_bits = len(watermark_bits)
-        n_coeffs = n_bits * 8
+        n_bits, n_coeffs = len(watermark_bits), len(watermark_bits) * 8
         candidate_idx = self._mid_freq_indices(len(flat), n_coeffs)
         energy_order = np.argsort(np.abs(flat[candidate_idx]))[::-1]
         abs_idx = candidate_idx[energy_order[:n_coeffs]]
@@ -138,19 +94,12 @@ class SSWatermarker:
         ycrcb_out[:, :, 0] = np.clip(Y_wm, 0, 255).astype(np.uint8)
         return cv2.cvtColor(ycrcb_out, cv2.COLOR_YCrCb2BGR)
 
-    def extract(
-        self,
-        image_bgr: np.ndarray,
-        original_bgr: np.ndarray,
-        n_bits: int,
-    ) -> np.ndarray:
+    def extract(self, image_bgr: np.ndarray, original_bgr: np.ndarray, n_bits: int) -> np.ndarray:
         def _dct_flat(img: np.ndarray) -> np.ndarray:
             ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-            Y = ycrcb[:, :, 0].astype(np.float64)
-            return np.asarray(dctn(Y, norm="ortho")).flatten()
+            return np.asarray(dctn(ycrcb[:, :, 0].astype(np.float64), norm="ortho")).flatten()
 
-        flat_orig = _dct_flat(original_bgr)
-        flat_recv = _dct_flat(image_bgr)
+        flat_orig, flat_recv = _dct_flat(original_bgr), _dct_flat(image_bgr)
         diff = flat_recv - flat_orig
 
         n_coeffs = n_bits * 8
@@ -165,8 +114,7 @@ class SSWatermarker:
     def extract_blind(self, image_bgr: np.ndarray, n_bits: int) -> np.ndarray:
         def _dct_flat(img: np.ndarray) -> np.ndarray:
             ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-            Y = ycrcb[:, :, 0].astype(np.float64)
-            return np.asarray(dctn(Y, norm="ortho")).flatten()
+            return np.asarray(dctn(ycrcb[:, :, 0].astype(np.float64), norm="ortho")).flatten()
 
         flat_recv = _dct_flat(image_bgr)
         n_coeffs  = n_bits * 8
@@ -178,23 +126,13 @@ class SSWatermarker:
         correlations = carrier @ flat_recv[abs_idx]
         return (correlations >= 0).astype(np.uint8)
 
-
-def run_baseline_comparison(
-    cfg: dict,
-    images: list[np.ndarray],
-    n_bits: int = 64,
-    seed: int = 42,
-    attacks: dict | None = None,
-) -> dict[str, dict[str, dict]]:
+def run_baseline_comparison(cfg: dict, images: list[np.ndarray], n_bits: int = 64, seed: int = 42, attacks: dict | None = None) -> dict[str, dict[str, dict]]:
     try:
         from tqdm import tqdm
         _tqdm_available = True
-    except ImportError:
-        _tqdm_available = False
+    except ImportError: _tqdm_available = False
 
-    if attacks is None:
-        attacks = BASELINE_ATTACKS
-
+    if attacks is None: attacks = BASELINE_ATTACKS
     rng = np.random.default_rng(seed)
     watermark = rng.integers(0, 2, n_bits).astype(np.uint8)
 
@@ -224,87 +162,41 @@ def run_baseline_comparison(
     attack_iter = tqdm(attacks.items(), desc="Attacks") if _tqdm_available else attacks.items()
 
     for attack_name, attack_fn in attack_iter:
-        print(f"  [baseline] Attack: {attack_name} | n_images={len(images)}")
-
-        adap_bers:  list[float] = []
-        adap_psnrs: list[float] = []
-        sota_bers:  list[float] = []
+        adap_bers, adap_psnrs, sota_bers, lsb_bers, ss_bers, ss_blind_bers = [], [], [], [], [], []
         fixed_bers: dict[str, list[float]] = {k: [] for k in fixed_bls}
-        lsb_bers:      list[float] = []
-        ss_bers:       list[float] = []
-        ss_blind_bers: list[float] = []
-
-        img_iter = (
-            tqdm(images, desc=f"  {attack_name}", leave=False)
-            if _tqdm_available else images
-        )
+        img_iter = tqdm(images, desc=f"  {attack_name}", leave=False) if _tqdm_available else images
 
         for img in img_iter:
-            # ---- Proposed adaptive-ECC (Semi-Blind Platform Key) ----
             rate_map = _adaptive_rate_map(img)
             wm = embed_watermark(img, watermark, rate_map, engine, scheme, alpha=alpha) 
             attacked = attack_fn(wm)                                         
-            dec = extract_watermark(                                          
-                attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha
-            )
+            dec = extract_watermark(attacked, n_bits, engine, rate_map=rate_map, scheme=scheme, alpha=alpha)
             adap_bers.append(bit_error_rate(watermark, dec))
             adap_psnrs.append(image_psnr(img, wm))
             
-            # ---- SOTA 2023 Baseline -------------------------------------
             wm_sota = sota_bl.embed(img, watermark)
-            att_sota = attack_fn(wm_sota)
-            dec_sota = sota_bl.extract(att_sota, n_bits)
+            dec_sota = sota_bl.extract(attack_fn(wm_sota), n_bits)
             sota_bers.append(bit_error_rate(watermark, dec_sota))
 
-            # ---- Fixed-rate ECC baselines --------------------------------
             for key, fb in fixed_bls.items():
                 wm_f, rm_f = fb.embed(img, watermark, scheme, alpha=alpha)
-                att_f = attack_fn(wm_f)                                      
-                dec_f = fb.extract(att_f, rm_f, n_bits, scheme, alpha=alpha)
+                dec_f = fb.extract(attack_fn(wm_f), rm_f, n_bits, scheme, alpha=alpha)
                 fixed_bers[key].append(bit_error_rate(watermark, dec_f))
 
-            # ---- LSB (no geometric correction) ---------------------------
             wm_lsb = lsb_bl.embed(img, watermark)
-            att_lsb = attack_fn(wm_lsb)                                          
-            dec_lsb = lsb_bl.extract(att_lsb, n_bits)
+            dec_lsb = lsb_bl.extract(attack_fn(wm_lsb), n_bits)
             lsb_bers.append(bit_error_rate(watermark, dec_lsb))
 
-            # ---- Spread-Spectrum (non-blind; subtracts original) ---------
             wm_ss = ss_bl.embed(img, watermark)
             att_ss = attack_fn(wm_ss)                                        
             dec_ss = ss_bl.extract(att_ss, img, n_bits)
             ss_bers.append(bit_error_rate(watermark, dec_ss))
+            ss_blind_bers.append(bit_error_rate(watermark, ss_bl.extract_blind(att_ss, n_bits)))
 
-            # ---- Spread-Spectrum blind (no original) ---------------------
-            dec_ss_blind = ss_bl.extract_blind(att_ss, n_bits)
-            ss_blind_bers.append(bit_error_rate(watermark, dec_ss_blind))
-
-        # Aggregate
-        all_results["adaptive_ecc"][attack_name] = {
-            "BER_mean":  float(np.mean(adap_bers)),
-            "BER_std":   float(np.std(adap_bers)),
-            "PSNR_mean": float(np.mean(adap_psnrs)),
-        }
-        all_results["sota_adaptive_dct_2023"][attack_name] = {
-            "BER_mean": float(np.mean(sota_bers)),
-            "BER_std":  float(np.std(sota_bers)),
-        }
-        for key in fixed_bls:
-            all_results[key][attack_name] = {
-                "BER_mean": float(np.mean(fixed_bers[key])),
-                "BER_std":  float(np.std(fixed_bers[key])),
-            }
-        all_results["lsb"][attack_name] = {
-            "BER_mean": float(np.mean(lsb_bers)),
-            "BER_std":  float(np.std(lsb_bers)),
-        }
-        all_results["spread_spectrum"][attack_name] = {
-            "BER_mean": float(np.mean(ss_bers)),
-            "BER_std":  float(np.std(ss_bers)),
-        }
-        all_results["spread_spectrum_blind"][attack_name] = {
-            "BER_mean": float(np.mean(ss_blind_bers)),
-            "BER_std":  float(np.std(ss_blind_bers)),
-        }
-
+        all_results["adaptive_ecc"][attack_name] = {"BER_mean": float(np.mean(adap_bers)), "BER_std": float(np.std(adap_bers)), "PSNR_mean": float(np.mean(adap_psnrs))}
+        all_results["sota_adaptive_dct_2023"][attack_name] = {"BER_mean": float(np.mean(sota_bers)), "BER_std": float(np.std(sota_bers))}
+        for key in fixed_bls: all_results[key][attack_name] = {"BER_mean": float(np.mean(fixed_bers[key])), "BER_std": float(np.std(fixed_bers[key]))}
+        all_results["lsb"][attack_name] = {"BER_mean": float(np.mean(lsb_bers)), "BER_std": float(np.std(lsb_bers))}
+        all_results["spread_spectrum"][attack_name] = {"BER_mean": float(np.mean(ss_bers)), "BER_std": float(np.std(ss_bers))}
+        all_results["spread_spectrum_blind"][attack_name] = {"BER_mean": float(np.mean(ss_blind_bers)), "BER_std": float(np.std(ss_blind_bers))}
     return all_results

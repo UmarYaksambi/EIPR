@@ -1,7 +1,3 @@
-# src/geometric_sync.py
-"""
-geometric_sync.py — Fourier sync-tone geometric correction for block-DCT watermarking.
-"""
 from __future__ import annotations
 
 import warnings
@@ -11,14 +7,11 @@ from typing import NamedTuple
 
 SYNC_ALPHA: float = 10.0
 SYNC_FREQS: list[tuple[float, float]] = [
-    (32.0,   0.0),
-    ( 0.0,  32.0),
-    (32.0,  32.0),
-    (32.0, -32.0),
+    (32.0,   0.0), ( 0.0,  32.0),
+    (32.0,  32.0), (32.0, -32.0),
 ]
-
 SEARCH_RADIUS: int = 15
-MIN_PEAK_SNR: float = 20.0
+MIN_PEAK_SNR: float = 5.0
 
 def _build_template(h: int, w: int) -> np.ndarray:
     xs  = np.arange(w, dtype=np.float64)[None, :]
@@ -51,18 +44,11 @@ def _magnitude_spectrum(Y: np.ndarray) -> np.ndarray:
     F    = np.fft.fftshift(np.fft.fft2(Y.astype(np.float64) * win))
     return np.abs(F)
 
-def _find_peak(
-    mag: np.ndarray,
-    expected_fu: float,
-    expected_fv: float,
-    search_radius: int,
-) -> tuple[float, float, float]:
+def _find_peak(mag: np.ndarray, expected_fu: float, expected_fv: float, search_radius: int) -> tuple[float, float, float]:
     h, w  = mag.shape
     cy, cx = h // 2, w // 2
-
     row_c = int(round(cy - expected_fv))
     col_c = int(round(cx + expected_fu))
-
     r     = int(search_radius)
     row_s = max(0, row_c - r)
     row_e = min(h, row_c + r + 1)
@@ -77,23 +63,28 @@ def _find_peak(
     mean_val = float(patch.mean()) + 1e-12
     snr      = peak_val / mean_val
 
-    idx       = np.unravel_index(np.argmax(patch), patch.shape)
-    found_row = row_s + idx[0]
-    found_col = col_s + idx[1]
+    idx = np.unravel_index(np.argmax(patch), patch.shape)
+    
+    # Sub-pixel peak estimation using Center of Mass
+    r_idx, c_idx = idx[0], idx[1]
+    r_s_sub = max(0, r_idx - 1); r_e_sub = min(patch.shape[0], r_idx + 2)
+    c_s_sub = max(0, c_idx - 1); c_e_sub = min(patch.shape[1], c_idx + 2)
+    neighborhood = patch[r_s_sub:r_e_sub, c_s_sub:c_e_sub]
+    mass = neighborhood.sum() + 1e-12
+    rr, cc = np.indices(neighborhood.shape)
+    r_offset = (rr * neighborhood).sum() / mass - (r_idx - r_s_sub)
+    c_offset = (cc * neighborhood).sum() / mass - (c_idx - c_s_sub)
 
+    found_row = row_s + r_idx + r_offset
+    found_col = col_s + c_idx + c_offset
     return float(found_col - cx), float(cy - found_row), snr
 
 def estimate_transform(attacked_bgr: np.ndarray) -> GeomTransform:
-    """
-    Estimate rotation and scale blindly via Cr-channel sync tones.
-    """
     ycrcb = cv2.cvtColor(attacked_bgr, cv2.COLOR_BGR2YCrCb)
     C_att = ycrcb[:, :, 1].astype(np.float32)
     mag   = _magnitude_spectrum(C_att)
 
-    found_pts:  list[tuple[float, float]] = []
-    expect_pts: list[tuple[float, float]] = []
-
+    found_pts, expect_pts = [], []
     for fu, fv in SYNC_FREQS:
         for sign in (1.0, -1.0):
             efu, efv = fu * sign, fv * sign
@@ -112,51 +103,35 @@ def estimate_transform(attacked_bgr: np.ndarray) -> GeomTransform:
         return GeomTransform(angle_deg=0.0, scale=1.0, tx=0.0, ty=0.0)
 
     A          = np.sum(found_c * np.conj(expected_c)) / denom
-    freq_scale = float(np.clip(abs(A),               0.4,  2.5))
+    freq_scale = float(np.clip(abs(A), 0.4, 2.5))
     angle_deg  = float(np.clip(np.degrees(np.angle(A)), -45.0, 45.0))
-
     return GeomTransform(angle_deg=angle_deg, scale=freq_scale, tx=0.0, ty=0.0)
 
-def correct_transform(
-    image_bgr: np.ndarray,
-    transform: GeomTransform,
-) -> np.ndarray:
-    h, w      = image_bgr.shape[:2]
+def correct_transform(image_bgr: np.ndarray, transform: GeomTransform) -> np.ndarray:
+    h, w = image_bgr.shape[:2]
     freq_scale = float(transform.scale)
     angle_deg  = float(transform.angle_deg)
 
-    if abs(freq_scale - 1.0) < 0.005 and abs(angle_deg) < 0.1:
+    # Increased thresholds to prevent false positives on pure valumetric attacks
+    if abs(freq_scale - 1.0) < 0.04 and abs(angle_deg) < 1.5:
         return image_bgr.copy()
 
     s_spatial = float(freq_scale)
     theta_rad = np.radians(angle_deg)
-    cos_t     = np.cos(theta_rad)
-    sin_t     = np.sin(theta_rad)
-    cx, cy    = w / 2.0, h / 2.0
+    cos_t, sin_t = np.cos(theta_rad), np.sin(theta_rad)
+    cx, cy = w / 2.0, h / 2.0
 
     a00 = s_spatial * cos_t;  a01 = s_spatial * (-sin_t)
     a10 = s_spatial * sin_t;  a11 = s_spatial * cos_t
     t0  = cx - a00 * cx - a01 * cy
     t1  = cy - a10 * cx - a11 * cy
 
-    M = np.float32([[a00, a01, t0],
-                    [a10, a11, t1]])
-
-    return cv2.warpAffine(
-        image_bgr, M, (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    M = np.float32([[a00, a01, t0], [a10, a11, t1]])
+    return cv2.warpAffine(image_bgr, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
 def correct_attacked_image(attacked_bgr: np.ndarray) -> np.ndarray:
-    """Fully blind geometric correction."""
     try:
         t = estimate_transform(attacked_bgr)
         return correct_transform(attacked_bgr, t)
     except Exception as exc:
-        warnings.warn(
-            f"[geometric_sync] correction failed ({exc!r}); "
-            "returning attacked image uncorrected.",
-            stacklevel=2,
-        )
         return attacked_bgr

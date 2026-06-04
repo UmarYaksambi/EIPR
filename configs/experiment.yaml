@@ -19,7 +19,7 @@ ecc:
   r_low: 0.25
 
 embedding:
-  alpha: 36.0
+  alpha: 16.0
   embed_coeff_indices: [1, 2, 3]
   block_size: 8
 
