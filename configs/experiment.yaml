@@ -10,7 +10,10 @@ watermark:
 
 ecc:
   scheme: reed_solomon
-  tau_low: 1.5443               
+  # Run --mode calibrate on your real DiffusionDB dataset to get these values.
+  # The values below are PLACEHOLDERS — they came from synthetic blurred-noise
+  # images and are wrong for real SD output. Re-calibrate before any paper run.
+  tau_low: 1.5443
   tau_high: 187.5232
   tau_percentile_low: 25
   tau_percentile_high: 75
@@ -19,7 +22,11 @@ ecc:
   r_low: 0.25
 
 embedding:
-  alpha: 16.0
+  # alpha=8.0 targets mean PSNR >= 40 dB (down from 16.0/28.0).
+  # With rate-coupled JND: smooth=4.0, mid=10.0, textured=20.0.
+  # Verify on 10 images before the full 500-image run:
+  #   python experiment_runner.py --config experiment.yaml --mode smoke_test
+  alpha: 8.0
   embed_coeff_indices: [1, 2, 3]
   block_size: 8
 
@@ -32,6 +39,10 @@ attacks:
   blur_ksizes: [3, 5]
   brightness_deltas: [10, 20]
   regeneration_strengths: [0.3, 0.4, 0.6]
+  # Set true only on a CUDA machine with diffusers installed.
+  # When true, experiment_runner will hard-crash if SD is unavailable
+  # rather than silently substituting the JPEG+noise surrogate.
+  require_real_regeneration: false
 
 results:
   output_dir: results/

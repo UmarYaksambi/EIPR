@@ -8,10 +8,16 @@ from scipy.fft import dctn, idctn
 from .ecc_engine import AdaptiveECCEngine, ECCScheme
 from .geometric_sync import embed_sync_chroma
 
-ALPHA: float = 28.0
+# ALPHA is the base QIM step size.
+# 8.0 targets mean PSNR >= 40 dB across a DiffusionDB dataset.
+# With rate-coupled JND: smooth=4.0, mid=10.0, textured=20.0.
+# This constant is imported by baseline_comparison.py as the default alpha
+# for all baselines — it MUST stay in sync with experiment.yaml embedding.alpha.
+ALPHA: float = 8.0
 BLOCK_SIZE: int = 8
 EMBED_COEFF_INDICES: list[int] = [1, 2, 3]
 BITS_PER_BLOCK: int = len(EMBED_COEFF_INDICES)
+
 
 def _embed_coeff(val: float, bit: int, alpha: float) -> float:
     q = int(np.floor(val / alpha))
@@ -19,20 +25,32 @@ def _embed_coeff(val: float, bit: int, alpha: float) -> float:
         q += 1
     return (q + 0.5) * alpha
 
+
 def _decode_coeff(val: float, alpha: float) -> int:
     return int(np.floor(val / alpha)) % 2
 
+
 def get_tier_alpha(tier_rate: float, base_alpha: float) -> float:
     """
-    Rate-Coupled JND Mask: stretch the QIM step size based on texture tier.
-    With base_alpha=16.0: Smooth=8.0, Mid=20.0, Textured=40.0
+    Rate-Coupled JND Mask: scale QIM step size by texture tier.
+
+    With base_alpha=8.0 (default, targets PSNR >= 40 dB):
+      Smooth   (rate >= 0.70): alpha = 4.0  — eye-sensitive smooth regions,
+                                               minimal distortion
+      Mid      (rate >= 0.40): alpha = 10.0 — moderate robustness
+      Textured (rate <  0.40): alpha = 20.0 — strong embedding in high-variance
+                                               blocks where noise is masked
+
+    The multiplier ratios (0.50 / 1.25 / 2.50) are fixed. Only base_alpha
+    is tuned to trade off PSNR vs robustness.
     """
     if tier_rate >= 0.70:
-        return base_alpha * 0.50  # Smooth (fragile to eye) -> 50% strength
+        return base_alpha * 0.50   # smooth  → 4.0  at base 8.0
     elif tier_rate >= 0.40:
-        return base_alpha * 1.25  # Mid -> 125% strength
+        return base_alpha * 1.25   # mid     → 10.0 at base 8.0
     else:
-        return base_alpha * 2.50  # Textured (hides noise) -> 250% strength
+        return base_alpha * 2.50   # textured → 20.0 at base 8.0
+
 
 def _image_to_dct_blocks(Y: np.ndarray) -> tuple[np.ndarray, int, int]:
     h, w = Y.shape
@@ -47,6 +65,7 @@ def _image_to_dct_blocks(Y: np.ndarray) -> tuple[np.ndarray, int, int]:
     blocks = np.ascontiguousarray(blocks)
     dct_blocks: np.ndarray = np.asarray(dctn(blocks, norm="ortho", axes=(-2, -1)))
     return dct_blocks, n_rows, n_cols
+
 
 def _embed_tier(
     Y_emb: np.ndarray,
@@ -66,11 +85,12 @@ def _embed_tier(
                 float(dct_b.flat[coeff_idx]), int(codeword[p]), alpha
             )
             bit_idx += 1
-            
+
         r0, c0 = br * BLOCK_SIZE, bc * BLOCK_SIZE
         Y_emb[r0:r0 + BLOCK_SIZE, c0:c0 + BLOCK_SIZE] = np.asarray(
             idctn(dct_b, norm="ortho")
         )
+
 
 def embed_watermark(
     image_bgr: np.ndarray,
@@ -80,10 +100,9 @@ def embed_watermark(
     scheme: ECCScheme = "reed_solomon",
     alpha: float = ALPHA,
 ) -> np.ndarray:
-    
-    # RESTORED: Chroma sync tones DO NOT collide with Y-channel QIM!
+    # Chroma sync tones embedded in Cr channel — does not collide with Y-channel QIM.
     image_bgr = embed_sync_chroma(image_bgr, channel=1)
-    
+
     ycrcb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb)
     Y = ycrcb[:, :, 0].astype(np.float64)
 
@@ -96,14 +115,13 @@ def embed_watermark(
     for tier_rate in unique_rates:
         if tier_rate <= 0.0:
             continue
-            
+
         tier_mask = np.abs(rounded_map - tier_rate) < 0.005
         br_arr, bc_arr = np.where(tier_mask)
         tier_coords = list(zip(br_arr.tolist(), bc_arr.tolist()))
         if not tier_coords:
             continue
 
-        # --- JND Scaling ---
         tier_alpha = get_tier_alpha(tier_rate, alpha)
 
         codeword = ecc_engine.encode_block(
@@ -114,6 +132,7 @@ def embed_watermark(
     ycrcb_out = ycrcb.copy()
     ycrcb_out[:, :, 0] = np.clip(Y_emb, 0, 255).astype(np.uint8)
     return cv2.cvtColor(ycrcb_out, cv2.COLOR_YCrCb2BGR)
+
 
 def embedding_capacity(
     image_shape: tuple[int, ...],
