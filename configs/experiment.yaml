@@ -13,8 +13,8 @@ ecc:
   # Run --mode calibrate on your real DiffusionDB dataset to get these values.
   # The values below are PLACEHOLDERS — they came from synthetic blurred-noise
   # images and are wrong for real SD output. Re-calibrate before any paper run.
-  tau_low: 1.5443
-  tau_high: 187.5232
+  tau_low: 1.5176
+  tau_high: 214.5201
   tau_percentile_low: 25
   tau_percentile_high: 75
   r_high: 0.75
@@ -42,7 +42,7 @@ attacks:
   # Set true only on a CUDA machine with diffusers installed.
   # When true, experiment_runner will hard-crash if SD is unavailable
   # rather than silently substituting the JPEG+noise surrogate.
-  require_real_regeneration: false
+  require_real_regeneration: true
 
 results:
   output_dir: results/

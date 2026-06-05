@@ -142,6 +142,6 @@ def download_ai_images():
 
 if __name__ == "__main__":
     print("Starting dataset generation (resuming if interrupted)...")
-    # download_natural_images()
+    download_natural_images()
     download_ai_images()
     print("\nDataset generation complete! You are ready to run the experiments.")

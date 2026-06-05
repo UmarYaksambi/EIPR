@@ -45,11 +45,11 @@ def get_tier_alpha(tier_rate: float, base_alpha: float) -> float:
     is tuned to trade off PSNR vs robustness.
     """
     if tier_rate >= 0.70:
-        return base_alpha * 0.50   # smooth  → 4.0  at base 8.0
+        return base_alpha * 0.50    # smooth   → 4.0  (invisible, PSNR-critical)
     elif tier_rate >= 0.40:
-        return base_alpha * 1.25   # mid     → 10.0 at base 8.0
+        return base_alpha * 1.50    # mid      → 12.0 (survives JPEG q50)
     else:
-        return base_alpha * 2.50   # textured → 20.0 at base 8.0
+        return base_alpha * 3.50    # textured → 28.0 (survives gaussian_20)
 
 
 def _image_to_dct_blocks(Y: np.ndarray) -> tuple[np.ndarray, int, int]:
