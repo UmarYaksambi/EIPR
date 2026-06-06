@@ -320,7 +320,7 @@ def run_ablation_rate(cfg: dict) -> None:
     print("[ablation_rate] Loading images …")
     images = load_dataset(
         cfg["data"]["ai_generated_path"],
-        limit=min(cfg["data"]["n_images"], 50),
+        limit=cfg["data"]["n_images"],
         image_size=tuple(cfg["data"]["image_size"]),
     )
 
@@ -415,7 +415,7 @@ def run_baseline_comparison(cfg: dict) -> None:
     print("[baseline_comparison] Loading images …")
     images = load_dataset(
         cfg["data"]["ai_generated_path"],
-        limit=min(cfg["data"]["n_images"], 50),
+        limit=cfg["data"]["n_images"],
         image_size=tuple(cfg["data"]["image_size"]),
     )
 
