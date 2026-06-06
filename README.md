@@ -1,4 +1,4 @@
-# adaptive-ecc-watermark-ai-images
+# Adaptive-ECC-Watermark-AI-Images
 
 <div align="center">
 
