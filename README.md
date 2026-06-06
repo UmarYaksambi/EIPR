@@ -1,5 +1,3 @@
-# Adaptive-ECC-Watermark-AI-Images
-
 <div align="center">
 
 # Adaptive ECC Watermarking for AI-Generated Images
