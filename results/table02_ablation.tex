@@ -1,0 +1,18 @@
+% ─── Table II: Ablation Study ────────────────────────────────────────────
+\begin{table*}[t]
+  \caption{Ablation Study: Fixed vs.~Adaptive ECC Rate. Metrics averaged over 500 test images.
+    BER values are mean $\pm$ std. Best result per column is \textbf{bold}.}
+  \label{tab:ablation}
+  \centering
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Method} & \textbf{PSNR (dB)} & \textbf{BER (Blur 5×5)} & \textbf{BER (SD Regen. 0.4)} \\
+    \midrule
+    Fixed $R=0.25$ & $32.565 \pm 0.000$ & $\mathbf{\mathbf{0.180} \pm 0.180}$ & $0.503 \pm 0.067$ \\
+    Fixed $R=0.50$ & $36.229 \pm 0.000$ & $0.235 \pm 0.172$ & $\mathbf{\mathbf{0.498} \pm 0.066}$ \\
+    Fixed $R=0.75$ & $\mathbf{\mathbf{37.552} \pm 0.000}$ & $0.403 \pm 0.111$ & $0.499 \pm 0.063$ \\
+    \midrule
+    \textbf{Adaptive ECC (Proposed)} & $35.483 \pm 0.000$ & $0.238 \pm 0.153$ & $0.502 \pm 0.061$ \\
+    \bottomrule
+  \end{tabular}
+\end{table*}

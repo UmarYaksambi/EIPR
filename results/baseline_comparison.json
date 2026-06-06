@@ -1,0 +1,183 @@
+{
+  "adaptive_ecc": {
+    "jpeg_q50": {
+      "BER_mean": 0.2218125,
+      "BER_std": 0.2510882486173935,
+      "PSNR_mean": 35.4826932261952
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.49871875,
+      "BER_std": 0.08928874224776324,
+      "PSNR_mean": 35.4826932261952
+    },
+    "gaussian_10": {
+      "BER_mean": 0.014875,
+      "BER_std": 0.08684140537497077,
+      "PSNR_mean": 35.4826932261952
+    },
+    "crop_10pct": {
+      "BER_mean": 0.01596875,
+      "BER_std": 0.08562373972612677,
+      "PSNR_mean": 35.4826932261952
+    },
+    "regeneration_04": {
+      "BER_mean": 0.49896875,
+      "BER_std": 0.061614120172956297,
+      "PSNR_mean": 35.4826932261952
+    }
+  },
+  "variance_adaptive_dct": {
+    "jpeg_q50": {
+      "BER_mean": 0.217,
+      "BER_std": 0.24798969862677767
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.428,
+      "BER_std": 0.16880954967803213
+    },
+    "gaussian_10": {
+      "BER_mean": 0.0236875,
+      "BER_std": 0.08534990022694813
+    },
+    "crop_10pct": {
+      "BER_mean": 0.029875,
+      "BER_std": 0.09700628201307378
+    },
+    "regeneration_04": {
+      "BER_mean": 0.508375,
+      "BER_std": 0.06218024455162588
+    }
+  },
+  "fixed_rate_0.25": {
+    "jpeg_q50": {
+      "BER_mean": 0.22415625,
+      "BER_std": 0.2527554613498737
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.4011875,
+      "BER_std": 0.20440642915830703
+    },
+    "gaussian_10": {
+      "BER_mean": 0.0155,
+      "BER_std": 0.08859793310230211
+    },
+    "crop_10pct": {
+      "BER_mean": 0.01578125,
+      "BER_std": 0.08287718582147621
+    },
+    "regeneration_04": {
+      "BER_mean": 0.5048125,
+      "BER_std": 0.061414670224222485
+    }
+  },
+  "fixed_rate_0.50": {
+    "jpeg_q50": {
+      "BER_mean": 0.226625,
+      "BER_std": 0.25065635714060797
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.42690625,
+      "BER_std": 0.16108936705967747
+    },
+    "gaussian_10": {
+      "BER_mean": 0.01509375,
+      "BER_std": 0.08237331063328401
+    },
+    "crop_10pct": {
+      "BER_mean": 0.02753125,
+      "BER_std": 0.0932661419926197
+    },
+    "regeneration_04": {
+      "BER_mean": 0.50515625,
+      "BER_std": 0.06465257964449292
+    }
+  },
+  "fixed_rate_0.75": {
+    "jpeg_q50": {
+      "BER_mean": 0.5631875,
+      "BER_std": 0.10439799522141217
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.5039375,
+      "BER_std": 0.064877619166782
+    },
+    "gaussian_10": {
+      "BER_mean": 0.49840625,
+      "BER_std": 0.06016659002043825
+    },
+    "crop_10pct": {
+      "BER_mean": 0.10834375,
+      "BER_std": 0.12337384038842067
+    },
+    "regeneration_04": {
+      "BER_mean": 0.497125,
+      "BER_std": 0.06259006011340779
+    }
+  },
+  "lsb": {
+    "jpeg_q50": {
+      "BER_mean": 0.498875,
+      "BER_std": 0.06602337417536308
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.5051875,
+      "BER_std": 0.06522530064131556
+    },
+    "gaussian_10": {
+      "BER_mean": 0.498125,
+      "BER_std": 0.06454770522644472
+    },
+    "crop_10pct": {
+      "BER_mean": 0.49703125,
+      "BER_std": 0.06412325625065761
+    },
+    "regeneration_04": {
+      "BER_mean": 0.499,
+      "BER_std": 0.06486145089727796
+    }
+  },
+  "spread_spectrum": {
+    "jpeg_q50": {
+      "BER_mean": 0.0024375,
+      "BER_std": 0.006004230279561235
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.00328125,
+      "BER_std": 0.007226456924904486
+    },
+    "gaussian_10": {
+      "BER_mean": 0.00246875,
+      "BER_std": 0.006032059531163465
+    },
+    "crop_10pct": {
+      "BER_mean": 0.50309375,
+      "BER_std": 0.062137220566159064
+    },
+    "regeneration_04": {
+      "BER_mean": 0.28940625,
+      "BER_std": 0.09390289095489819
+    }
+  },
+  "spread_spectrum_blind": {
+    "jpeg_q50": {
+      "BER_mean": 0.4935625,
+      "BER_std": 0.06473778238980696
+    },
+    "jpeg_q30": {
+      "BER_mean": 0.49625,
+      "BER_std": 0.06371169192149899
+    },
+    "gaussian_10": {
+      "BER_mean": 0.49421875,
+      "BER_std": 0.06254119735972041
+    },
+    "crop_10pct": {
+      "BER_mean": 0.5005,
+      "BER_std": 0.06533973714364023
+    },
+    "regeneration_04": {
+      "BER_mean": 0.5018125,
+      "BER_std": 0.06143336710412347
+    }
+  }
+}

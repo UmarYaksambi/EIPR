@@ -78,6 +78,9 @@ downloads/
 *.hdf5
 *.db
 *.sqlite
+*.jpg
+*.jpeg
+*.png
 
 # Keep folder structure
 !data/.gitkeep
@@ -97,21 +100,6 @@ artifacts/
 *.pkl
 *.pickle
 *.pb
-
-# =========================
-# Experiment Outputs
-# =========================
-results/
-outputs/
-runs/
-reports/
-figures/
-plots/
-*.png
-*.jpg
-*.jpeg
-*.svg
-*.pdf
 
 # =========================
 # Cache

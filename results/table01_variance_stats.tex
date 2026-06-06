@@ -1,0 +1,29 @@
+
+% ─── Table I: Block DCT Variance Distribution Statistics ─────────────────────
+\begin{table}[t]
+  \caption{Descriptive Statistics of 8$\times$8 Block DCT Variance
+           Across 50 Stable Diffusion Images ($N = 204,800 Blocks)}
+  \label{tab:variance_stats}
+  \centering
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Statistic} & \textbf{Raw Value} & $\boldsymbol{\log_{10}}$\textbf{ Value} \\\\
+    \midrule
+    Min & 0.0000 & -6.0000 \\
+    P10 & 0.0000 & -6.0000 \\
+    P25 ($\tau_{\text{low}}$) & 1.0178 & 0.0076 \\
+    Median & 17.7702 & 1.2497 \\
+    P75 ($\tau_{\text{high}}$) & 187.9512 & 2.2740 \\
+    P90 & 810.8230 & 2.9089 \\
+    Max & 11313.5332 & 4.0536 \\
+    Mean & 276.5523 & 2.4418 \\
+    Std Dev & 701.8728 & 2.8463 \\
+
+    \midrule
+    \multicolumn{3}{l}{\textit{Tier distribution (by block count):}} \\\\
+    \quad T1 Smooth   & 51,178 (25.0\%) & \\\\
+    \quad T2 Mid      & 102,422 (50.0\%) & \\\\
+    \quad T3 Textured & 51,200 (25.0\%) & \\\\
+    \bottomrule
+  \end{tabular}
+\end{table}

@@ -1,0 +1,30 @@
+{
+  "fixed_rate_0.25": {
+    "PSNR_mean": 32.56488668861475,
+    "BER_blur_5_mean": 0.18028125,
+    "BER_blur_5_std": 0.17968923640465362,
+    "BER_regeneration_04_mean": 0.50278125,
+    "BER_regeneration_04_std": 0.06724618803090254
+  },
+  "fixed_rate_0.50": {
+    "PSNR_mean": 36.22947117188206,
+    "BER_blur_5_mean": 0.2355,
+    "BER_blur_5_std": 0.1724895377262053,
+    "BER_regeneration_04_mean": 0.4980625,
+    "BER_regeneration_04_std": 0.06550700702024173
+  },
+  "fixed_rate_0.75": {
+    "PSNR_mean": 37.552477052703075,
+    "BER_blur_5_mean": 0.40265625,
+    "BER_blur_5_std": 0.11091450025667292,
+    "BER_regeneration_04_mean": 0.498625,
+    "BER_regeneration_04_std": 0.0625473570584721
+  },
+  "adaptive_ecc": {
+    "PSNR_mean": 35.4826932261952,
+    "BER_blur_5_mean": 0.23753125,
+    "BER_blur_5_std": 0.15274602017626351,
+    "BER_regeneration_04_mean": 0.50234375,
+    "BER_regeneration_04_std": 0.060964537271166915
+  }
+}

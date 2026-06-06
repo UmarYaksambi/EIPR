@@ -1,0 +1,33 @@
+\begin{table}[t]
+  \centering
+  \caption{Proposed semi-blind adaptive-ECC scheme under signal-processing and geometric attacks (500 AI-generated images, DiffusionDB, 512\,px, $n=64$ bits, $\alpha=8$ with rate-coupled JND scaling, mean PSNR\,=\,35.5\,dB). Geometric attacks corrected via Cr-channel Fourier sync tones.}
+  \label{tab:full}
+  \begin{tabular}{lrrr}
+    \toprule
+    Attack & BER & NC & Detacc\_10Pct \\
+    \midrule
+    jpeg\_q70 & $0.0158 \pm 0.0873$ & $0.9685 \pm 0.1746$ & $0.9680 \pm 0.9680$ \\
+    jpeg\_q50 & $0.2218 \pm 0.2511$ & $0.5564 \pm 0.5022$ & $0.5560 \pm 0.5560$ \\
+    jpeg\_q30 & $0.4987 \pm 0.0893$ & $0.0026 \pm 0.1786$ & $0.0160 \pm 0.0160$ \\
+    gaussian\_05 & $0.0106 \pm 0.0712$ & $0.9787 \pm 0.1423$ & $0.9780 \pm 0.9780$ \\
+    gaussian\_10 & $0.0139 \pm 0.0827$ & $0.9722 \pm 0.1654$ & $0.9720 \pm 0.9720$ \\
+    gaussian\_20 & $0.0959 \pm 0.1755$ & $0.8081 \pm 0.3509$ & $0.7640 \pm 0.7640$ \\
+    crop\_05pct & $0.0385 \pm 0.1109$ & $0.9229 \pm 0.2218$ & $0.8740 \pm 0.8740$ \\
+    crop\_10pct & $0.0160 \pm 0.0856$ & $0.9681 \pm 0.1712$ & $0.9640 \pm 0.9640$ \\
+    rotation\_2 & $0.0123 \pm 0.0750$ & $0.9754 \pm 0.1500$ & $0.9720 \pm 0.9720$ \\
+    rotation\_5 & $0.0145 \pm 0.0793$ & $0.9711 \pm 0.1586$ & $0.9640 \pm 0.9640$ \\
+    scale\_50pct & $0.0277 \pm 0.0946$ & $0.9446 \pm 0.1892$ & $0.9160 \pm 0.9160$ \\
+    median\_3 & $0.0213 \pm 0.0893$ & $0.9574 \pm 0.1787$ & $0.9440 \pm 0.9440$ \\
+    median\_5 & $0.4865 \pm 0.1162$ & $0.0270 \pm 0.2323$ & $0.0000 \pm 0.0000$ \\
+    blur\_3 & $0.0139 \pm 0.0793$ & $0.9722 \pm 0.1586$ & $0.9660 \pm 0.9660$ \\
+    blur\_5 & $0.2375 \pm 0.1527$ & $0.5249 \pm 0.3055$ & $0.2080 \pm 0.2080$ \\
+    brightness\_10 & $0.0125 \pm 0.0767$ & $0.9751 \pm 0.1534$ & $0.9740 \pm 0.9740$ \\
+    brightness\_20 & $0.0230 \pm 0.1056$ & $0.9541 \pm 0.2113$ & $0.9540 \pm 0.9540$ \\
+    sharpening & $0.0482 \pm 0.1033$ & $0.9036 \pm 0.2065$ & $0.8020 \pm 0.8020$ \\
+    color\_jitter & \textbf{$0.0063 \pm 0.0575$} & \textbf{$0.9874 \pm 0.1150$} & \textbf{$0.9880 \pm 0.9880$} \\
+    regeneration\_03 & $0.5013 \pm 0.0625$ & $-0.0026 \pm 0.1251$ & $0.0000 \pm 0.0000$ \\
+    regeneration\_04 & $0.4917 \pm 0.0627$ & $0.0166 \pm 0.1254$ & $0.0000 \pm 0.0000$ \\
+    regeneration\_06 & $0.5000 \pm 0.0599$ & $0.0001 \pm 0.1199$ & $0.0000 \pm 0.0000$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
