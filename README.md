@@ -237,7 +237,7 @@ Runtime: ~30 min on CPU for 500 × 512² images; ~3 min on GPU.
 
 ### Step 3 — Ablation: ECC Rate (Table 2)
 
-Sweeps fixed ECC rates (0.25, 0.50, 0.75) on a 50-image subset, isolating the contribution of the adaptive rate map.
+Sweeps fixed ECC rates (0.25, 0.50, 0.75) on a 500-image subset, isolating the contribution of the adaptive rate map.
 
 ```bash
 python experiments/experiment_runner.py \
